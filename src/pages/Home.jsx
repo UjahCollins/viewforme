@@ -8,6 +8,7 @@ import FAQ from "../components/FAQ.jsx";
 import FinalCTA from "../components/FinalCTA.jsx";
 
 function Home() {
+  
   return (
     <>
       <Hero />

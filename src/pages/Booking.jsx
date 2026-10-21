@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import PropertyDetails from "../components/booking/PropertyDetails.jsx";
 import {
@@ -15,6 +15,21 @@ import ViewingSchedule from "../components/booking/ViewingSchedule.jsx";
 import ViewingRequirements from "../components/booking/ViewingRequirements.jsx";
 import CustomerDetails from "../components/booking/CustomerDetails.jsx";
 import BookingReview from "../components/booking/BookingReview.jsx";
+
+import { buildBookingPayload } from "../utils/buildBookingPayload.js";
+import {
+  getBookingSubmissionKey,
+  getSavedBooking,
+  savePendingBooking,
+} from "../utils/bookingSubmission.js";
+import {
+  getServices,
+  createBooking,
+  createCheckoutSession,
+  getBookingQuote,
+  getBookingSummary,
+} from "../services/bookingApi.js";
+
 
 const services = [
   {
@@ -47,6 +62,13 @@ const services = [
   },
 ];
 
+const serviceSlugMap = {
+  residential: "residential-viewing",
+  commercial: "commercial-viewing",
+  storage: "storage-inspection",
+  construction: "construction-inspection",
+};
+
 const bookingSteps = [
   "Service",
   "Property",
@@ -68,6 +90,47 @@ function Booking() {
   );
 
   const [step, setStep] = useState(1);
+
+  
+const [backendServices, setBackendServices] = useState([]);
+const [servicesLoading, setServicesLoading] = useState(true);
+const [servicesError, setServicesError] = useState("");
+const [bookingQuote, setBookingQuote] = useState(null);
+const [quoteLoading, setQuoteLoading] = useState(false);
+const [quoteError, setQuoteError] = useState("");
+
+useEffect(() => {
+  let active = true;
+
+  async function loadServices() {
+    try {
+      setServicesLoading(true);
+      setServicesError("");
+
+      const response = await getServices();
+
+      if (active) {
+        setBackendServices(response.data ?? []);
+      }
+    } catch (error) {
+      if (active) {
+        setServicesError(
+          error.message || "Unable to load viewing services."
+        );
+      }
+    } finally {
+      if (active) {
+        setServicesLoading(false);
+      }
+    }
+  }
+
+  loadServices();
+
+  return () => {
+    active = false;
+  };
+}, []);
 
   const handleContinue = () => {
     if (!selectedService) return;
@@ -114,6 +177,76 @@ const [formData, setFormData] = useState({
   privacyConsent: false,
 });
 
+const selectedServiceRecord = useMemo(() => {
+  const slug = serviceSlugMap[selectedService];
+
+  return (
+    backendServices.find(
+      (service) => service.slug === slug
+    ) ?? null
+  );
+}, [backendServices, selectedService]);
+
+const canBookSelectedService =
+  selectedServiceRecord?.pricingType === "FIXED";
+
+useEffect(() => {
+  if (
+    step !== 6 ||
+    !selectedServiceRecord ||
+    selectedServiceRecord.pricingType !== "FIXED"
+  ) {
+    setBookingQuote(null);
+    setQuoteError("");
+    setQuoteLoading(false);
+    return;
+  }
+
+  let active = true;
+
+  async function loadQuote() {
+    setQuoteLoading(true);
+    setQuoteError("");
+    setBookingQuote(null);
+
+    try {
+      const response = await getBookingQuote(
+        selectedServiceRecord.id,
+        {
+          city: formData.city,
+          postcode: formData.postcode,
+        }
+      );
+
+      if (active) {
+        setBookingQuote(response.data);
+      }
+    } catch (error) {
+      if (active) {
+        setQuoteError(
+          error.message || "Unable to retrieve booking price."
+        );
+      }
+    } finally {
+      if (active) {
+        setQuoteLoading(false);
+      }
+    }
+  }
+
+  loadQuote();
+
+  return () => {
+    active = false;
+  };
+}, [
+  step,
+  selectedServiceRecord?.id,
+  selectedServiceRecord?.pricingType,
+  formData.city,
+  formData.postcode,
+]);
+
 
 
 
@@ -126,6 +259,132 @@ const handleChange = (event) => {
     [name]: type === "checkbox" ? checked : value,
   }));
 };
+
+
+const [isSubmitting, setIsSubmitting] = useState(false);
+const [submitError, setSubmitError] = useState("");
+
+const submissionLock = useRef(false);
+
+
+const handleBookingPayment = async () => {
+  if (submissionLock.current) return;
+
+  submissionLock.current = true;
+  setIsSubmitting(true);
+  setSubmitError("");
+
+  try {
+    if (!selectedServiceRecord) {
+      throw new Error("Please select a valid viewing service.");
+    }
+
+    if (selectedServiceRecord.pricingType !== "FIXED") {
+      throw new Error(
+        "This service requires a quotation rather than direct payment."
+      );
+    }
+
+    if (!formData.privacyConsent) {
+      throw new Error(
+        "Please accept the privacy policy before continuing."
+      );
+    }
+
+    const payload = buildBookingPayload(
+      selectedServiceRecord.id,
+      formData
+    );
+
+    const submissionKey = getBookingSubmissionKey(payload);
+
+    // Reuse an existing booking only when the submitted
+    // information matches the current form.
+    let pendingBooking = getSavedBooking(submissionKey);
+
+    if (!pendingBooking) {
+      const bookingResponse = await createBooking(payload);
+
+      if (
+        !bookingResponse?.data?.id ||
+        !bookingResponse?.data?.summaryToken
+      ) {
+        throw new Error(
+          "The booking server returned an incomplete response."
+        );
+      }
+
+      pendingBooking = {
+        bookingId: bookingResponse.data.id,
+        bookingToken: bookingResponse.data.summaryToken,
+        bookingReference: bookingResponse.data.reference,
+        submissionKey,
+      };
+
+      savePendingBooking(pendingBooking);
+    }
+
+    
+const summaryResponse = await getBookingSummary(
+  pendingBooking.bookingId,
+  pendingBooking.bookingToken
+);
+
+const actualAmount = summaryResponse.data.amount;
+const actualCurrency = summaryResponse.data.currency;
+
+if (
+  actualAmount !== bookingQuote?.amount ||
+  actualCurrency !== bookingQuote?.currency
+) {
+  setBookingQuote({
+    ...bookingQuote,
+    amount: actualAmount,
+    currency: actualCurrency,
+  });
+
+  throw new Error(
+    "The booking price has changed. Please review the updated amount and click Proceed to Secure Payment again."
+  );
+}
+
+
+    const checkoutResponse = await createCheckoutSession(
+      pendingBooking.bookingId,
+      pendingBooking.bookingToken
+    );
+
+    const checkoutUrl = checkoutResponse?.data?.checkoutUrl;
+
+    if (!checkoutUrl) {
+      throw new Error(
+        "The payment server did not return a checkout URL."
+      );
+    }
+
+    // Redirect only to Stripe Checkout.
+    const checkoutLocation = new URL(checkoutUrl);
+
+    if (
+      checkoutLocation.protocol !== "https:" ||
+      checkoutLocation.hostname !== "checkout.stripe.com"
+    ) {
+      throw new Error("Invalid Stripe Checkout URL.");
+    }
+
+    window.location.assign(checkoutUrl);
+  } catch (error) {
+    setSubmitError(
+      error.message ||
+        "We couldn't prepare your payment. Please try again."
+    );
+  } finally {
+    submissionLock.current = false;
+    setIsSubmitting(false);
+  }
+};
+
+
 
 
   return (
@@ -271,13 +530,29 @@ const handleChange = (event) => {
                 <button
                   type="button"
                   onClick={handleContinue}
-                  disabled={!selectedService}
+                  disabled={
+                    !selectedService ||
+                    servicesLoading ||
+                    !canBookSelectedService
+                    }
                   className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-3.5 font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Continue
                   <ArrowRight size={18} />
                 </button>
               </div>
+
+              {servicesLoading && (
+  <p className="mt-5 text-sm text-slate-500">
+    Loading available viewing services...
+  </p>
+)}
+
+{servicesError && (
+  <p role="alert" className="mt-5 text-sm text-red-600">
+    {servicesError}
+  </p>
+)}
             </>
           )}
 
@@ -330,6 +605,18 @@ const handleChange = (event) => {
     formData={formData}
     onEdit={(targetStep) => setStep(targetStep)}
     onBack={() => setStep(5)}
+    onSubmit={handleBookingPayment}
+    isSubmitting={isSubmitting}
+    submitError={submitError}
+    canPay={
+      canBookSelectedService &&
+      !quoteLoading &&
+      !quoteError &&
+      bookingQuote !== null
+    }
+    bookingQuote={bookingQuote}
+    quoteLoading={quoteLoading}
+    quoteError={quoteError}
   />
 )}
 

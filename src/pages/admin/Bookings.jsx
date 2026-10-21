@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -19,19 +19,30 @@ import {
 } from "lucide-react";
 
 import StatusBadge from "../../components/admin/StatusBadge";
-import { allBookings } from "../../data/adminMockData";
+import { getAdminBookings } from "../../services/adminBookingApi.js";
+import { normalizeAdminBooking } from "../../utils/normalizeAdminBooking.js";
+import { getAdminServices } from "../../services/adminServiceApi.js";
+
 
 const ITEMS_PER_PAGE = 5;
 
 const statusOptions = [
-  "All Statuses",
+   "All Statuses",
   "Pending",
-  "Assigned",
   "Confirmed",
   "In Progress",
   "Completed",
   "Cancelled",
 ];
+
+const statusValueMap = {
+   "All Statuses": "",
+  Pending: "PENDING",
+  Confirmed: "CONFIRMED",
+  "In Progress": "IN_PROGRESS",
+  Completed: "COMPLETED",
+  Cancelled: "CANCELLED",
+};
 
 const paymentOptions = [
   "All Payments",
@@ -40,6 +51,13 @@ const paymentOptions = [
   "Refunded",
 ];
 
+const paymentValueMap = {
+  "All Payments": "",
+  Paid: "SUCCEEDED",
+  Unpaid: "PENDING",
+  Refunded: "REFUNDED",
+};
+
 const serviceOptions = [
   "All Services",
   "Residential Viewing",
@@ -47,6 +65,7 @@ const serviceOptions = [
   "Storage Inspection",
   "Construction Inspection",
 ];
+
 
 const formatDate = (value) =>
   new Intl.DateTimeFormat("en-GB", {
@@ -83,80 +102,113 @@ function SummaryCard({ title, value, icon: Icon }) {
 }
 
 function Bookings() {
+  const [allBookings, setAllBookings] = useState([]);
+const [loading, setLoading] = useState(true);
+const [error, setError] = useState("");
+const [totalBookingsCount, setTotalBookingsCount] = useState(0);
+const [totalPagesCount, setTotalPagesCount] = useState(1);
+const [bookingSummary, setBookingSummary] = useState({
+  total: 0,
+  pending: 0,
+  confirmed: 0,
+  completed: 0,
+});
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] =
     useState("All Statuses");
   const [paymentFilter, setPaymentFilter] =
     useState("All Payments");
-  const [serviceFilter, setServiceFilter] =
-    useState("All Services");
+  const [serviceFilter, setServiceFilter] = useState("");
+const [services, setServices] = useState([]);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
-  const filteredBookings = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  
+useEffect(() => {
+  let active = true;
 
-    return allBookings.filter((booking) => {
-      const matchesSearch =
-        !query ||
-        [
-          booking.id,
-          booking.customer,
-          booking.email,
-          booking.location,
-          booking.propertyAddress,
-        ].some((value) =>
-          String(value || "").toLowerCase().includes(query)
-        );
+  async function loadServices() {
+    try {
+      const response = await getAdminServices();
 
-      const matchesStatus =
-        statusFilter === "All Statuses" ||
-        booking.status === statusFilter;
+      if (!active) return;
 
-      const matchesPayment =
-        paymentFilter === "All Payments" ||
-        booking.paymentStatus === paymentFilter;
+      setServices(response.data ?? []);
+    } catch (error) {
+      console.error("Failed to load services:", error);
+    }
+  }
 
-      const matchesService =
-        serviceFilter === "All Services" ||
-        booking.service === serviceFilter;
+  loadServices();
 
-      const matchesStartDate =
-        !startDate || booking.date >= startDate;
+  return () => {
+    active = false;
+  };
+}, []);
 
-      const matchesEndDate =
-        !endDate || booking.date <= endDate;
 
-      return (
-        matchesSearch &&
-        matchesStatus &&
-        matchesPayment &&
-        matchesService &&
-        matchesStartDate &&
-        matchesEndDate
+  useEffect(() => {
+  let active = true;
+
+  async function loadBookings() {
+    setLoading(true);
+    setError("");
+
+    try {
+    const response = await getAdminBookings({
+  page: currentPage,
+  limit: ITEMS_PER_PAGE,
+  search: debouncedSearch,
+  startDate,
+  endDate,
+  status: statusValueMap[statusFilter] || undefined,
+  paymentStatus: paymentValueMap[paymentFilter] || undefined,
+  serviceId: serviceFilter || undefined,
+});
+
+      if (!active) return;
+
+      setAllBookings(
+        (response.data ?? []).map(normalizeAdminBooking)
       );
-    });
-  }, [
-    search,
-    statusFilter,
-    paymentFilter,
-    serviceFilter,
-    startDate,
-    endDate,
-  ]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredBookings.length / ITEMS_PER_PAGE)
-  );
+      setTotalBookingsCount(response.pagination?.total ?? 0);
 
-  const safePage = Math.min(currentPage, totalPages);
+setTotalPagesCount(
+  Math.max(1, response.pagination?.totalPages ?? 1)
+);
 
-  const paginatedBookings = filteredBookings.slice(
-    (safePage - 1) * ITEMS_PER_PAGE,
-    safePage * ITEMS_PER_PAGE
-  );
+setBookingSummary({
+  total: response.summary?.total ?? 0,
+  pending: response.summary?.pending ?? 0,
+  confirmed: response.summary?.confirmed ?? 0,
+  completed: response.summary?.completed ?? 0,
+});
+    } catch (err) {
+      if (!active) return;
+
+      setAllBookings([]);
+      setError(err.message || "Unable to load bookings.");
+    } finally {
+      if (active) setLoading(false);
+    }
+  }
+
+  loadBookings();
+
+  return () => {
+    active = false;
+  };
+}, [currentPage, debouncedSearch, startDate, endDate, statusFilter, paymentFilter, serviceFilter,]);
+
+ const filteredBookings = allBookings;
+
+ // Pagination 
+const totalPages = totalPagesCount;
+const safePage = Math.min(currentPage, totalPages);
+const paginatedBookings = filteredBookings;
 
   const updateFilter = (setter, value) => {
     setter(value);
@@ -165,30 +217,30 @@ function Bookings() {
 
   const resetFilters = () => {
     setSearch("");
-    setStatusFilter("All Statuses");
-    setPaymentFilter("All Payments");
-    setServiceFilter("All Services");
-    setStartDate("");
-    setEndDate("");
-    setCurrentPage(1);
+  setStatusFilter("All Statuses");
+  setPaymentFilter("All Payments");
+  setServiceFilter("");
+  setStartDate("");
+  setEndDate("");
+  setCurrentPage(1);
   };
 
-  const totalBookings = allBookings.length;
-
-  const pendingBookings = allBookings.filter(
-    (booking) => booking.status === "Pending"
-  ).length;
-
-  const confirmedBookings = allBookings.filter(
-    (booking) => booking.status === "Confirmed"
-  ).length;
-
-  const completedBookings = allBookings.filter(
-    (booking) => booking.status === "Completed"
-  ).length;
+ const totalBookings = bookingSummary.total;
+const pendingBookings = bookingSummary.pending;
+const confirmedBookings = bookingSummary.confirmed;
+const completedBookings = bookingSummary.completed;
 
   const selectClass =
     "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-[#17324D] outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100";
+
+    useEffect(() => {
+  const timeout = setTimeout(() => {
+    setDebouncedSearch(search);
+  }, 400);
+
+  return () => clearTimeout(timeout);
+}, [search]);
+
 
   return (
     <div className="space-y-8">
@@ -202,10 +254,6 @@ function Bookings() {
           <p className="mt-2 text-sm text-slate-600">
             Review and manage property viewing requests.
           </p>
-
-          <p className="mt-2 text-xs font-semibold text-amber-700">
-            Demo data — no live bookings
-          </p>
         </div>
 
         <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
@@ -213,7 +261,7 @@ function Bookings() {
             size={18}
             className="text-[#2A9D8F]"
           />
-          {totalBookings} Sample Bookings
+          {totalBookings} Bookings
         </div>
       </div>
 
@@ -362,11 +410,14 @@ function Bookings() {
               }
               className={selectClass}
             >
-              {serviceOptions.map((service) => (
-                <option key={service} value={service}>
-                  {service}
-                </option>
-              ))}
+            <option value="">All Services</option>
+
+{services.map((service) => (
+  <option key={service.id} value={service.id}>
+    {service.name}
+    {!service.isActive ? " (Inactive)" : ""}
+  </option>
+))}
             </select>
           </div>
 
@@ -412,6 +463,23 @@ function Bookings() {
         </div>
       </section>
 
+{/* LOADING STATE */}
+{loading && (
+  <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center text-sm text-slate-500">
+    Loading bookings...
+  </div>
+)}
+
+{/* ERROR STATE */}
+{!loading && error && (
+  <div
+    role="alert"
+    className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700"
+  >
+    {error}
+  </div>
+)}
+
       {/* BOOKINGS TABLE */}
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-6">
@@ -421,12 +489,12 @@ function Bookings() {
             </h2>
 
             <p className="mt-1 text-sm text-slate-500">
-              Showing {filteredBookings.length} matching bookings
+              Showing {totalBookingsCount} matching bookings
             </p>
           </div>
         </div>
 
-        {paginatedBookings.length > 0 ? (
+        {!loading && !error && paginatedBookings.length > 0 ? (
           <>
             {/* DESKTOP TABLE */}
             <div className="hidden overflow-x-auto lg:block">
@@ -452,7 +520,7 @@ function Bookings() {
                       className="text-sm text-slate-600 transition hover:bg-slate-50"
                     >
                       <td className="px-5 py-4 font-bold text-[#17324D]">
-                        {booking.id}
+                        {booking.reference}
                       </td>
 
                       <td className="px-5 py-4">
@@ -516,7 +584,7 @@ function Bookings() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-bold text-[#17324D]">
-                        {booking.id}
+                        {booking.reference}
                       </p>
 
                       <p className="mt-1 text-sm text-slate-600">
@@ -575,36 +643,34 @@ function Bookings() {
 
               <div className="flex items-center gap-2">
                 <button
-                  type="button"
-                  onClick={() =>
-                    setCurrentPage((page) =>
-                      Math.max(1, page - 1)
-                    )
-                  }
-                  disabled={safePage === 1}
-                  aria-label="Previous page"
-                  className="rounded-lg border border-slate-200 p-2 text-[#17324D] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <ChevronLeft size={19} />
-                </button>
+  type="button"
+  onClick={() =>
+    setCurrentPage((page) => Math.max(1, page - 1))
+  }
+  disabled={loading || safePage === 1}
+  aria-label="Previous page"
+  className="rounded-lg border border-slate-200 p-2 text-[#17324D] disabled:cursor-not-allowed disabled:opacity-40"
+>
+  <ChevronLeft size={19} />
+</button>
 
                 <button
-                  type="button"
-                  onClick={() =>
-                    setCurrentPage((page) =>
-                      Math.min(totalPages, page + 1)
-                    )
-                  }
-                  disabled={safePage === totalPages}
-                  aria-label="Next page"
-                  className="rounded-lg border border-slate-200 p-2 text-[#17324D] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <ChevronRight size={19} />
-                </button>
+  type="button"
+  onClick={() =>
+    setCurrentPage((page) =>
+      Math.min(totalPagesCount, page + 1)
+    )
+  }
+  disabled={loading || safePage >= totalPagesCount}
+  aria-label="Next page"
+  className="rounded-lg border border-slate-200 p-2 text-[#17324D] disabled:cursor-not-allowed disabled:opacity-40"
+>
+  <ChevronRight size={19} />
+</button>
               </div>
             </div>
           </>
-        ) : (
+        ) :!loading && !error ? (
           /* EMPTY STATE */
           <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#E8F6F3] text-[#2A9D8F]">
@@ -628,7 +694,7 @@ function Bookings() {
               Clear Filters
             </button>
           </div>
-        )}
+        ):null}
       </section>
     </div>
   );

@@ -96,6 +96,13 @@ function BookingReview({
   formData,
   onEdit,
   onBack,
+  onSubmit,
+  isSubmitting = false,
+  submitError = "",
+  canPay = false,
+  bookingQuote = null,
+quoteLoading = false,
+quoteError = "",
 }) {
   const allChecklistItems = [
     ...formData.checklistItems,
@@ -317,56 +324,109 @@ function BookingReview({
         </ReviewSection>
       </div>
 
-      {/* Pricing */}
-      <section className="mt-8 overflow-hidden rounded-2xl border border-slate-200">
-        <div className="flex items-center gap-3 bg-[#17324D] px-6 py-5 text-white">
-          <CreditCard size={23} />
+{/* Pricing */}
+<section className="mt-8 overflow-hidden rounded-2xl border border-slate-200">
+  <div className="flex items-center gap-3 bg-[#17324D] px-6 py-5 text-white">
+    <CreditCard size={23} />
 
-          <h3 className="text-lg font-bold">
-            Booking Price & Payment
-          </h3>
-        </div>
+    <h3 className="text-lg font-bold">
+      Booking Summary & Payment
+    </h3>
+  </div>
 
-        <div className="p-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <span className="font-semibold text-[#17324D]">
-              Viewing Service
-            </span>
+  <div className="p-6">
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-sm font-semibold text-[#17324D]">
+        Viewing Service
+      </span>
 
-            <span className="text-sm font-semibold text-slate-500">
-              Price pending
-            </span>
-          </div>
+      <span className="text-right text-sm font-medium text-slate-600">
+        {bookingQuote?.serviceName ||
+          serviceNames[selectedService]}
+      </span>
+    </div>
 
-          <div className="mt-5 flex items-start gap-3 rounded-xl bg-[#F0FAF8] p-4">
-            <Info
-              size={20}
-              className="mt-0.5 shrink-0 text-[#2A9D8F]"
-            />
+    <div className="mt-5 border-t border-slate-100 pt-5">
+      <div className="flex items-center justify-between gap-4">
+        <span className="font-bold text-[#17324D]">
+          Total Payable
+        </span>
 
-            <p className="text-sm leading-6 text-[#226E66]">
-              The final price will depend on the selected
-              service, property location, travel distance,
-              and any additional viewing requirements.
-              Payment will only be available once a
-              confirmed price has been calculated.
-            </p>
-          </div>
+        {quoteLoading ? (
+          <span className="text-sm text-slate-500">
+            Calculating price...
+          </span>
+        ) : bookingQuote ? (
+          <span className="text-2xl font-extrabold text-[#17324D]">
+            {new Intl.NumberFormat("en-GB", {
+              style: "currency",
+              currency: bookingQuote.currency,
+            }).format(Number(bookingQuote.amount))}
+          </span>
+        ) : (
+          <span className="text-sm text-slate-500">
+            Price unavailable
+          </span>
+        )}
+      </div>
+    </div>
 
-          <button
-            type="button"
-            disabled
-            className="mt-6 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-slate-300 px-6 py-4 font-semibold text-slate-600"
-          >
-            <CreditCard size={19} />
-            Secure Payment — Coming Soon
-          </button>
+    <div className="mt-5 flex items-start gap-3 rounded-xl bg-[#F0FAF8] p-4">
+      <Info
+        size={20}
+        className="mt-0.5 shrink-0 text-[#2A9D8F]"
+      />
 
-          <p className="mt-3 text-center text-xs text-slate-500">
-            No payment will be collected at this stage.
-          </p>
-        </div>
-      </section>
+      <p className="text-sm leading-6 text-[#226E66]">
+        This amount has been retrieved from ViewForMe's
+        pricing system. Payment is processed securely
+        through Stripe. Your viewing appointment will
+        remain subject to confirmation.
+      </p>
+    </div>
+
+    {quoteError && (
+      <p
+        role="alert"
+        className="mt-4 text-sm text-red-600"
+      >
+        {quoteError}
+      </p>
+    )}
+
+    {submitError && (
+      <p
+        role="alert"
+        className="mt-4 text-sm text-red-600"
+      >
+        {submitError}
+      </p>
+    )}
+
+    <button
+      type="button"
+      onClick={onSubmit}
+      disabled={!canPay || isSubmitting}
+      className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-4 font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
+    >
+      <CreditCard size={19} />
+
+      {isSubmitting
+        ? "Preparing Secure Checkout..."
+        : quoteLoading
+          ? "Retrieving Price..."
+          : "Proceed to Secure Payment"}
+    </button>
+
+    <p className="mt-3 text-center text-xs text-slate-500">
+      You will review the payment details again on Stripe
+      before completing payment.
+    </p>
+  </div>
+</section>
+
+
+
 
       {/* Booking status */}
       <div className="mt-7 flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-5">

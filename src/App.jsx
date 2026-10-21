@@ -34,14 +34,19 @@ import Payments from "./pages/admin/Payments.jsx";
 import EnquiryDetails from "./pages/admin/EnquiryDetails.jsx";
 import Enquiries from "./pages/admin/Enquiries.jsx";
 import Settings from "./pages/admin/Settings.jsx";
+import BookingSuccess from "./pages/BookingSuccess.jsx";
+import BookingCancel from "./pages/BookingCancel.jsx";
 
 function App() {
+  
   return (
     <BrowserRouter>
       <Routes>
         <Route element={<MainLayout />}>
           <Route path="/" element={<Home />} />
           <Route path="/book" element={<Booking />} />
+           <Route path="/booking/success" element={<BookingSuccess />} />
+          <Route path="/booking/cancel" element={<BookingCancel />} />
           <Route path="/about" element={<About />} />
           <Route path="/services" element={<Services />} />
           <Route path="/how-it-works" element={<HowItWorksPage />} />

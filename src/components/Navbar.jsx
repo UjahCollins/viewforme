@@ -10,6 +10,7 @@ const navLinks = [
   { label: "Contact", href: "/contact" },
 ];
 
+
 function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
 

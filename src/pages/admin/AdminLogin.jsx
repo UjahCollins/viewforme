@@ -1,7 +1,6 @@
-
 import { useState } from "react";
-import { Link } from "react-router-dom";
-
+import { Link, useNavigate } from "react-router-dom";
+import { loginAdmin } from "../../services/adminAuthApi.js";
 import {
   Eye,
   EyeOff,
@@ -32,6 +31,8 @@ function AdminLogin() {
     useState(false);
   const [resetEmail, setResetEmail] = useState("");
   const [error, setError] = useState("");
+  const navigate = useNavigate();
+const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target;
@@ -44,37 +45,54 @@ function AdminLogin() {
     setError("");
   };
 
-  const handleLogin = (event) => {
-    event.preventDefault();
-    setError("");
+ 
+const handleLogin = async (event) => {
+  event.preventDefault();
+  setError("");
 
-    if (!formData.email.trim()) {
-      setError("Please enter your email address.");
-      return;
+  const email = formData.email.trim().toLowerCase();
+  const password = formData.password;
+
+  if (!email) {
+    setError("Please enter your email address.");
+    return;
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    setError("Please enter a valid email address.");
+    return;
+  }
+
+  if (!password) {
+    setError("Please enter your password.");
+    return;
+  }
+
+  try {
+    setIsSubmitting(true);
+
+    const response = await loginAdmin({
+      email,
+      password,
+    });
+
+    if (!response.success) {
+      throw new Error(
+        response.message || "Unable to sign in."
+      );
     }
 
-    if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-        formData.email.trim()
-      )
-    ) {
-      setError("Please enter a valid email address.");
-      return;
-    }
-
-    if (!formData.password) {
-      setError("Please enter your password.");
-      return;
-    }
-
-    // Backend authentication will be connected later.
-    // Never authenticate users solely in frontend code.
-    // Never store passwords in localStorage or sessionStorage.
-
+    navigate("/admin", { replace: true });
+  } catch (error) {
     setError(
-      "Admin authentication is not available yet. The login API will be connected during backend development."
+      error.message ||
+        "Login failed. Please check your credentials."
     );
-  };
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
 
   const handlePasswordReset = (event) => {
     event.preventDefault();
@@ -455,12 +473,14 @@ function AdminLogin() {
 
                 {/* SUBMIT */}
                 <button
-                  type="submit"
-                  className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-4 font-semibold text-white transition hover:bg-[#238579]"
-                >
-                  Sign In
-                  <ArrowRight size={19} />
-                </button>
+  type="submit"
+  disabled={isSubmitting}
+  className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-4 font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-60"
+>
+  {isSubmitting ? "Signing In..." : "Sign In"}
+
+  {!isSubmitting && <ArrowRight size={19} />}
+</button>
 
                 {/* SECURITY NOTE */}
                 <div className="mt-7 flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4">

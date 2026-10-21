@@ -25,10 +25,13 @@ import StatusBadge from "../../components/admin/StatusBadge";
 import BookingProgress from "../../components/admin/BookingProgress";
 
 import {
-  allBookings,
   availableViewers,
   bookingDetailsExtras,
 } from "../../data/adminMockData";
+
+import { getAdminBookingById } from "../../services/adminBookingApi.js";
+
+import { normalizeAdminBookingDetails } from "../../utils/normalizeAdminBookingDetails.js";
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat("en-GB", {
@@ -36,16 +39,28 @@ const formatCurrency = (amount) =>
     currency: "GBP",
   }).format(amount);
 
+
 const formatDate = (value) => {
   if (!value) return "Not confirmed";
+
+  const date =
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? new Date(`${value}T12:00:00Z`)
+      : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid date";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+  }).format(date);
 };
+
 
 const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-[#17324D] outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100";
@@ -83,11 +98,56 @@ function InfoRow({ label, value }) {
 }
 
 function BookingDetails() {
-  const { id } = useParams();
+ 
+const { id } = useParams();
 
-  const booking = allBookings.find(
-    (item) => item.id === id
-  );
+const [booking, setBooking] = useState(null);
+const [loading, setLoading] = useState(true);
+const [error, setError] = useState("");
+
+useEffect(() => {
+  let active = true;
+
+  async function loadBooking() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await getAdminBookingById(id);
+
+      if (!active) return;
+
+      const bookingData = response.data;
+
+      if (!bookingData) {
+        throw new Error("Booking not found.");
+      }
+
+      setBooking(normalizeAdminBookingDetails(bookingData));
+    } catch (err) {
+      if (!active) return;
+
+      setBooking(null);
+      setError(err.message || "Unable to load booking.");
+    } finally {
+      if (active) {
+        setLoading(false);
+      }
+    }
+  }
+
+  if (id) {
+    loadBooking();
+  } else {
+    setError("Invalid booking ID.");
+    setLoading(false);
+  }
+
+  return () => {
+    active = false;
+  };
+}, [id]);
+
 
   const extras = bookingDetailsExtras[id] || {};
 
@@ -104,22 +164,35 @@ function BookingDetails() {
 
   const [notice, setNotice] = useState("");
 
-  useEffect(() => {
-    if (!booking) return;
+  
+useEffect(() => {
+  if (!booking) return;
 
-    setForm({
-      status: booking.status,
-      viewer: booking.viewer || "",
-      accessStatus: extras.accessStatus || "Not Arranged",
-      confirmedDate: extras.confirmedDate || "",
-      confirmedTime: extras.confirmedTime || "",
-      reportStatus: extras.reportStatus || "Not Started",
-      reportDelivered: extras.reportDelivered || false,
-      internalNotes: extras.internalNotes || "",
-    });
+  setForm({
+    status: booking.status,
+    viewer: booking.viewer || "",
+    accessStatus: extras.accessStatus || "Not Arranged",
+    confirmedDate: extras.confirmedDate || "",
+    confirmedTime: extras.confirmedTime || "",
+    reportStatus: extras.reportStatus || "Not Started",
+    reportDelivered: extras.reportDelivered || false,
+    internalNotes: extras.internalNotes || "",
+  });
 
-    setNotice("");
-  }, [id]);
+  setNotice("");
+}, [booking, id]);
+
+
+if (loading) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white px-6 py-20 text-center">
+      <p className="text-sm font-medium text-slate-600">
+        Loading booking details...
+      </p>
+    </div>
+  );
+}
+
 
   if (!booking) {
     return (
@@ -134,7 +207,7 @@ function BookingDetails() {
         </h1>
 
         <p className="mt-3 text-sm text-slate-600">
-          We couldn't find a booking with ID {id}.
+          {error || `We couldn't find a booking with ID ${id}.`}
         </p>
 
         <Link
@@ -237,7 +310,7 @@ function BookingDetails() {
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-extrabold text-[#17324D] sm:text-3xl">
-              Booking {booking.id}
+              Booking {booking.reference || booking.id}
             </h1>
 
             <StatusBadge status={form.status} />
@@ -344,7 +417,7 @@ function BookingDetails() {
 
             <InfoRow
               label="Property Type"
-              value={extras.propertyType}
+              value={booking.propertyPostcode}
             />
 
             <InfoRow
@@ -363,7 +436,7 @@ function BookingDetails() {
               </h3>
 
               <p className="mt-3 rounded-xl bg-[#F6F9FA] p-4 text-sm leading-7 text-slate-600">
-                {extras.specialInstructions ||
+                {booking.specialInstructions ||
                   "No additional viewing instructions provided."}
               </p>
             </div>
@@ -406,9 +479,7 @@ function BookingDetails() {
                 </p>
 
                 <p className="mt-2 font-semibold text-[#17324D]">
-                  {formatDate(
-                    extras.preferredDate || booking.date
-                  )}
+                  {formatDate(booking.date)}
                 </p>
               </div>
 
@@ -418,7 +489,7 @@ function BookingDetails() {
                 </p>
 
                 <p className="mt-2 font-semibold text-[#17324D]">
-                  {extras.preferredTime || booking.time}
+                  {booking.time || "Not provided"}
                 </p>
               </div>
 
@@ -480,14 +551,19 @@ function BookingDetails() {
             icon={MapPin}
           >
             <InfoRow
-              label="Access Contact"
-              value={extras.accessContact}
-            />
+  label="Access Contact"
+  value={booking.accessContactName}
+/>
 
-            <InfoRow
-              label="Contact Number"
-              value={extras.accessPhone}
-            />
+<InfoRow
+  label="Contact Number"
+  value={booking.accessContactPhone}
+/>
+
+<InfoRow
+  label="Access Instructions"
+  value={booking.accessNotes}
+/>
 
             <div className="mt-5">
               <label
@@ -751,6 +827,15 @@ function BookingDetails() {
                 status={booking.paymentStatus}
               />
             </div>
+
+            <InfoRow
+  label="Payment Date"
+  value={
+    booking.paidAt
+      ? formatDate(booking.paidAt)
+      : "Not Paid"
+  }
+/>
 
             <p className="mt-4 text-xs leading-6 text-slate-500">
               Payment status is read-only in this
