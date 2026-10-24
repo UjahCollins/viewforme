@@ -4,7 +4,6 @@ import { Check } from "lucide-react";
 const steps = [
   "Requested",
   "Paid",
-  "Access",
   "Viewer",
   "Confirmed",
   "Completed",
@@ -13,7 +12,6 @@ const steps = [
 
 function BookingProgress({
   paymentStatus,
-  accessStatus,
   viewer,
   status,
   reportDelivered,
@@ -21,7 +19,6 @@ function BookingProgress({
   const completed = [
     true,
     paymentStatus === "Paid",
-    accessStatus === "Arranged",
     Boolean(viewer),
     ["Confirmed", "In Progress", "Completed"].includes(status),
     status === "Completed",

@@ -24,6 +24,7 @@ export async function apiRequest(endpoint, options = {}) {
 
     error.status = response.status;
     error.code = data?.code;
+    error.errors = data?.errors;
     throw error;
   }
 

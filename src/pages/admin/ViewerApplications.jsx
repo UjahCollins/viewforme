@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -17,18 +17,53 @@ import {
 
 import StatusBadge from "../../components/admin/StatusBadge";
 
-import {
-  viewerApplications,
-  applicationStatuses,
-} from "../../data/adminMockData";
+import { getAdminViewerApplications } from "../../services/adminViewerApplicationService.js";
 
-const formatDate = (value) =>
-  new Intl.DateTimeFormat("en-GB", {
+
+const formatDate = (value) => {
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "—";
+
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+  }).format(date);
+};
+
+const applicationStatuses = [
+  "PENDING",
+  "UNDER_REVIEW",
+  "APPROVED",
+  "REJECTED",
+];
+
+const formatStatus = (status) => {
+  const labels = {
+    PENDING: "Pending",
+    UNDER_REVIEW: "Under Review",
+    APPROVED: "Approved",
+    REJECTED: "Rejected",
+  };
+
+  return labels[status] || status;
+};
+
+const formatAvailability = (availability) => {
+  const labels = {
+    weekdays: "Weekdays",
+    weekends: "Weekends",
+    both: "Weekdays & Weekends",
+    flexible: "Flexible",
+  };
+
+  return labels[availability] || "Not specified";
+};
+
 
 function SummaryCard({ title, value, icon: Icon }) {
   return (
@@ -51,68 +86,128 @@ function SummaryCard({ title, value, icon: Icon }) {
 }
 
 function ViewerApplications() {
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [locationFilter, setLocationFilter] = useState("All");
+ 
+const [search, setSearch] = useState("");
+const [statusFilter, setStatusFilter] = useState("All");
+const [locationFilter, setLocationFilter] = useState("All");
 
-  const locations = [
-    ...new Set(
-      viewerApplications.map((item) => item.location)
-    ),
-  ].sort();
+const [applications, setApplications] = useState([]);
+const [loading, setLoading] = useState(true);
+const [error, setError] = useState("");
+const [page, setPage] = useState(1);
 
-  const filteredApplications = useMemo(() => {
-    const query = search.trim().toLowerCase();
+const [pagination, setPagination] = useState({
+  page: 1,
+  limit: 20,
+  total: 0,
+  totalPages: 1,
+});
 
-    return viewerApplications.filter((application) => {
-      const matchesSearch =
-        !query ||
-        [
-          application.id,
-          application.name,
-          application.email,
-          application.location,
-        ].some((value) =>
-          value.toLowerCase().includes(query)
-        );
+useEffect(() => {
+  let cancelled = false;
 
-      const matchesStatus =
-        statusFilter === "All" ||
-        application.status === statusFilter;
+  const fetchApplications = async () => {
+    try {
+      setLoading(true);
+      setError("");
 
-      const matchesLocation =
-        locationFilter === "All" ||
-        application.location === locationFilter;
+      const response = await getAdminViewerApplications({
+        page,
+        limit: 20,
+        status: statusFilter === "All"
+          ? undefined
+          : statusFilter,
+      });
 
-      return (
-        matchesSearch &&
-        matchesStatus &&
-        matchesLocation
+      if (cancelled) return;
+
+      setApplications(response.data || []);
+
+      setPagination(
+        response.pagination || {
+          page,
+          limit: 20,
+          total: 0,
+          totalPages: 1,
+        }
       );
-    });
-  }, [search, statusFilter, locationFilter]);
+    } catch (err) {
+      if (cancelled) return;
 
-  const total = viewerApplications.length;
-
-  const pending = viewerApplications.filter(
-    (item) =>
-      item.status === "Pending" ||
-      item.status === "Under Review"
-  ).length;
-
-  const approved = viewerApplications.filter(
-    (item) => item.status === "Approved"
-  ).length;
-
-  const rejected = viewerApplications.filter(
-    (item) => item.status === "Rejected"
-  ).length;
-
-  const resetFilters = () => {
-    setSearch("");
-    setStatusFilter("All");
-    setLocationFilter("All");
+      setApplications([]);
+      setError(
+        err.message || "Unable to load viewer applications."
+      );
+    } finally {
+      if (!cancelled) setLoading(false);
+    }
   };
+
+  fetchApplications();
+
+  return () => {
+    cancelled = true;
+  };
+}, [page, statusFilter]);
+
+const locations = useMemo(() => {
+  return [
+    ...new Set(
+      applications
+        .map((item) => item.city?.trim())
+        .filter(Boolean)
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+}, [applications]);
+
+const filteredApplications = useMemo(() => {
+  const query = search.trim().toLowerCase();
+
+  return applications.filter((application) => {
+    const matchesSearch =
+      !query ||
+      [
+        application.id,
+        application.fullName,
+        application.email,
+        application.city,
+      ].some((value) =>
+        String(value || "").toLowerCase().includes(query)
+      );
+
+    const matchesLocation =
+      locationFilter === "All" ||
+      application.city?.toLowerCase() ===
+        locationFilter.toLowerCase();
+
+    return matchesSearch && matchesLocation;
+  });
+}, [applications, search, locationFilter]);
+
+// These counts represent the current loaded page.
+const total = applications.length;
+
+const pending = applications.filter(
+  (item) =>
+    item.status === "PENDING" ||
+    item.status === "UNDER_REVIEW"
+).length;
+
+const approved = applications.filter(
+  (item) => item.status === "APPROVED"
+).length;
+
+const rejected = applications.filter(
+  (item) => item.status === "REJECTED"
+).length;
+
+const resetFilters = () => {
+  setSearch("");
+  setStatusFilter("All");
+  setLocationFilter("All");
+  setPage(1);
+};
+
 
   const selectClass =
     "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-[#17324D] outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100";
@@ -130,9 +225,6 @@ function ViewerApplications() {
           ViewForMe property viewers.
         </p>
 
-        <p className="mt-2 text-xs font-semibold text-amber-700">
-          Demo data — no live applications
-        </p>
       </div>
 
       {/* STATISTICS */}
@@ -160,6 +252,11 @@ function ViewerApplications() {
           value={rejected}
           icon={XCircle}
         />
+
+        <p className="text-xs text-slate-500">
+  Status breakdown reflects the current page of applications.
+  Total records in the selected status: {pagination.total}.
+</p>
       </div>
 
       {/* FILTERS */}
@@ -211,18 +308,20 @@ function ViewerApplications() {
             <select
               id="application-status"
               value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(event.target.value)
-              }
+             onChange={(event) => {
+  setStatusFilter(event.target.value);
+  setLocationFilter("All");
+  setPage(1);
+}}
               className={selectClass}
             >
               <option value="All">All Statuses</option>
 
               {applicationStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
+  <option key={status} value={status}>
+    {formatStatus(status)}
+  </option>
+))}
             </select>
           </div>
 
@@ -254,6 +353,24 @@ function ViewerApplications() {
         </div>
       </section>
 
+      {loading && (
+  <p
+    role="status"
+    className="rounded-xl bg-slate-50 p-5 text-sm text-slate-600"
+  >
+    Loading viewer applications...
+  </p>
+)}
+
+{error && (
+  <p
+    role="alert"
+    className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700"
+  >
+    {error}
+  </p>
+)}
+
       {/* APPLICATION DIRECTORY */}
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="border-b border-slate-100 p-6">
@@ -266,7 +383,7 @@ function ViewerApplications() {
           </p>
         </div>
 
-        {filteredApplications.length > 0 ? (
+        {!loading && !error && filteredApplications.length > 0 ?  (
           <>
             {/* DESKTOP TABLE */}
             <div className="hidden overflow-x-auto lg:block">
@@ -290,7 +407,7 @@ function ViewerApplications() {
                     >
                       <td className="px-6 py-4">
                         <p className="font-semibold text-[#17324D]">
-                          {application.name}
+                          {application.fullName}
                         </p>
 
                         <p className="mt-1 text-xs text-slate-400">
@@ -303,20 +420,20 @@ function ViewerApplications() {
                       </td>
 
                       <td className="px-6 py-4">
-                        {application.location}
+                        {application.city}
                       </td>
 
                       <td className="px-6 py-4">
-                        {application.availability}
+                        formatAvailability(application.availability)
                       </td>
 
                       <td className="whitespace-nowrap px-6 py-4">
-                        {formatDate(application.submittedAt)}
+                        {formatDate(application.createdAt)}
                       </td>
 
                       <td className="px-6 py-4">
                         <StatusBadge
-                          status={application.status}
+                          status={formatStatus(application.status)}
                         />
                       </td>
 
@@ -345,7 +462,7 @@ function ViewerApplications() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-bold text-[#17324D]">
-                        {application.name}
+                        {application.fullName}
                       </p>
 
                       <p className="mt-1 text-xs text-slate-500">
@@ -354,23 +471,23 @@ function ViewerApplications() {
                     </div>
 
                     <StatusBadge
-                      status={application.status}
+                      status={formatStatus(application.status)}
                     />
                   </div>
 
                   <div className="mt-5 space-y-3 text-sm text-slate-600">
                     <p className="flex items-center gap-2">
                       <MapPin size={16} />
-                      {application.location}
+                      {application.city}
                     </p>
 
                     <p className="flex items-center gap-2">
                       <CalendarDays size={16} />
-                      Applied {formatDate(application.submittedAt)}
+                      Applied {formatDate(application.createdAt)}
                     </p>
 
                     <p>
-                      Availability: {application.availability}
+                      Availability: formatAvailability(application.availability)
                     </p>
                   </div>
 
@@ -385,7 +502,7 @@ function ViewerApplications() {
               ))}
             </div>
           </>
-        ) : (
+        ) : !loading && !error ? (
           <div className="px-6 py-20 text-center">
             <Search
               size={35}
@@ -408,8 +525,41 @@ function ViewerApplications() {
               Clear Filters
             </button>
           </div>
-        )}
+        ):null}
       </section>
+
+
+      
+{!loading && !error && pagination.totalPages > 1 && (
+  <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5">
+    <p className="text-sm text-slate-600">
+      Page {pagination.page} of {pagination.totalPages}
+      {" · "}
+      {pagination.total} applications
+    </p>
+
+    <div className="flex gap-3">
+      <button
+        type="button"
+        disabled={page <= 1}
+        onClick={() => setPage((previous) => previous - 1)}
+        className="rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-[#17324D] disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Previous
+      </button>
+
+      <button
+        type="button"
+        disabled={page >= pagination.totalPages}
+        onClick={() => setPage((previous) => previous + 1)}
+        className="rounded-xl bg-[#2A9D8F] px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Next
+      </button>
+    </div>
+  </div>
+)}
+
     </div>
   );
 }

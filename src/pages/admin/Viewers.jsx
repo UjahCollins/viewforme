@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 
 import StatusBadge from "../../components/admin/StatusBadge";
-import { viewerProfiles } from "../../data/adminMockData";
+import { getAdminViewers } from "../../services/adminViewerService";
 
 const selectClass =
   "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-[#17324D] outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100";
@@ -42,69 +42,154 @@ function SummaryCard({ title, value, icon: Icon }) {
 }
 
 function Viewers() {
+  const [viewerProfiles, setViewerProfiles] = useState([]);
+const [loading, setLoading] = useState(true);
+const [error, setError] = useState("");
+const [pagination, setPagination] = useState(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [locationFilter, setLocationFilter] = useState("All");
-  const [availabilityFilter, setAvailabilityFilter] =
-    useState("All");
+  const [availabilityFilter, setAvailabilityFilter] = useState("All");
 
-  const locations = [
-    ...new Set(
-      viewerProfiles.flatMap((viewer) => viewer.coverageAreas)
-    ),
-  ].sort();
+useEffect(() => {
+  let cancelled = false;
 
-  const filteredViewers = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  const fetchViewers = async () => {
+    try {
+      setLoading(true);
+      setError("");
 
-    return viewerProfiles.filter((viewer) => {
-      const matchesSearch =
-        !query ||
-        [
-          viewer.id,
-          viewer.name,
-          viewer.email,
-          viewer.location,
-          ...viewer.coverageAreas,
-        ].some((value) =>
-          value.toLowerCase().includes(query)
-        );
+      const response = await getAdminViewers({
+        page: 1,
+        limit: 20,
+      });
 
-      const matchesStatus =
-        statusFilter === "All" ||
-        viewer.status === statusFilter;
+      if (cancelled) return;
 
-      const matchesLocation =
-        locationFilter === "All" ||
-        viewer.coverageAreas.includes(locationFilter);
+      if (!response.success || !Array.isArray(response.data)) {
+        throw new Error("Invalid viewer response from server.");
+      }
 
-      const matchesAvailability =
-        availabilityFilter === "All" ||
-        viewer.availability === availabilityFilter;
+      const formattedViewers = response.data.map((viewer) => ({
+        ...viewer,
+        name: viewer.fullName || "Unknown Viewer",
+        location: viewer.city || "Not provided",
+        coverageAreas: viewer.coverageAreas || [],
+        availability: ({
+  weekdays: "Weekdays",
+  weekends: "Weekends",
+  both: "Weekdays and Weekends",
+  flexible: "Flexible",
+})[viewer.availability?.toLowerCase()] || "Not provided",
+        status:
+          viewer.status.charAt(0).toUpperCase() +
+          viewer.status.slice(1).toLowerCase(),
+        totalAssignments: viewer._count?.assignments ?? 0,
+        completedViewings: null,
+      }));
 
-      return (
-        matchesSearch &&
-        matchesStatus &&
-        matchesLocation &&
-        matchesAvailability
+      setViewerProfiles(formattedViewers);
+      setPagination(response.pagination || null);
+    } catch (err) {
+      if (!cancelled) {
+        setError(err.message || "Unable to load viewers.");
+      }
+    } finally {
+      if (!cancelled) {
+        setLoading(false);
+      }
+    }
+  };
+
+  fetchViewers();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
+
+
+
+const locations = [
+  ...new Map(
+    viewerProfiles
+      .flatMap((viewer) => viewer.coverageAreas || [])
+      .filter(Boolean)
+      .map((area) => [
+        area.trim().toLowerCase(),
+        area.trim(),
+      ])
+  ).values(),
+].sort((a, b) => a.localeCompare(b));
+
+
+
+
+const filteredViewers = useMemo(() => {
+  const query = search.trim().toLowerCase();
+
+  return viewerProfiles.filter((viewer) => {
+    const searchableValues = [
+      viewer.id,
+      viewer.name,
+      viewer.email,
+      viewer.location,
+      ...(viewer.coverageAreas || []),
+    ];
+
+    const matchesSearch =
+      !query ||
+      searchableValues.some((value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .includes(query)
       );
-    });
-  }, [
-    search,
-    statusFilter,
-    locationFilter,
-    availabilityFilter,
-  ]);
 
-  const totalViewers = viewerProfiles.length;
+    const matchesStatus =
+      statusFilter === "All" ||
+      viewer.status?.toLowerCase() ===
+        statusFilter.toLowerCase();
 
-  const activeViewers = viewerProfiles.filter(
-    (viewer) => viewer.status === "Active"
-  ).length;
+    const matchesLocation =
+      locationFilter === "All" ||
+      (viewer.coverageAreas || []).some(
+        (area) =>
+          area.toLowerCase() ===
+          locationFilter.toLowerCase()
+      );
 
-  const inactiveViewers = viewerProfiles.filter(
-    (viewer) => viewer.status === "Inactive"
-  ).length;
+   const matchesAvailability =
+  availabilityFilter === "All" ||
+  (availabilityFilter === "both"
+    ? viewer.availability === "Weekdays and Weekends"
+    : viewer.availability?.toLowerCase() ===
+      availabilityFilter.toLowerCase());
+
+    return (
+      matchesSearch &&
+      matchesStatus &&
+      matchesLocation &&
+      matchesAvailability
+    );
+  });
+}, [
+  viewerProfiles,
+  search,
+  statusFilter,
+  locationFilter,
+  availabilityFilter,
+]);
+
+
+const totalViewers = pagination?.total ?? viewerProfiles.length;
+
+const activeViewers = viewerProfiles.filter(
+  (viewer) => viewer.status === "Active"
+).length;
+
+const inactiveViewers = viewerProfiles.filter(
+  (viewer) => viewer.status === "Inactive"
+).length;
 
   const resetFilters = () => {
     setSearch("");
@@ -115,6 +200,20 @@ function Viewers() {
 
   return (
     <div className="space-y-8">
+      {loading && (
+  <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
+    Loading registered viewers...
+  </div>
+)}
+
+{error && (
+  <div
+    role="alert"
+    className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+  >
+    {error}
+  </div>
+)}
       {/* HEADER */}
       <div>
         <h1 className="text-2xl font-extrabold text-[#17324D] sm:text-3xl">
@@ -126,9 +225,7 @@ function Viewers() {
           and operational availability.
         </p>
 
-        <p className="mt-2 text-xs font-semibold text-amber-700">
-          Demo data — no live viewer records
-        </p>
+        
       </div>
 
       {/* STATISTICS */}
@@ -268,6 +365,7 @@ function Viewers() {
               <option value="Weekdays">Weekdays</option>
               <option value="Weekends">Weekends</option>
               <option value="Flexible">Flexible</option>
+              <option value="both">Weekdays and Weekends</option>
             </select>
           </div>
         </div>
@@ -296,7 +394,7 @@ function Viewers() {
                     <th className="px-6 py-4">Location</th>
                     <th className="px-6 py-4">Coverage</th>
                     <th className="px-6 py-4">Availability</th>
-                    <th className="px-6 py-4">Completed</th>
+                    <th className="px-6 py-4">Assignments</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Action</th>
                   </tr>
@@ -352,7 +450,7 @@ function Viewers() {
                       </td>
 
                       <td className="px-6 py-4 font-semibold text-[#17324D]">
-                        {viewer.completedViewings}
+                        {viewer.totalAssignments ?? 0}
                       </td>
 
                       <td className="px-6 py-4">
@@ -432,8 +530,8 @@ function Viewers() {
 
                   <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
                     <p className="text-sm text-slate-600">
-                      <strong>{viewer.completedViewings}</strong>{" "}
-                      completed
+                      <strong>{viewer.totalAssignments ?? 0}</strong>{" "}
+                      Assignments
                     </p>
 
                     <Link

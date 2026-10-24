@@ -15,6 +15,7 @@ import {
   Smartphone,
   CarFront,
 } from "lucide-react";
+import { submitViewerApplication } from "../services/viewerApplicationApi.js";
 
 const responsibilities = [
   {
@@ -64,9 +65,10 @@ const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm text-[#17324D] outline-none transition placeholder:text-slate-400 focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100";
 
 function BecomeViewer() {
-  const [formData, setFormData] = useState(initialForm);
-  const [formError, setFormError] = useState("");
-
+ const [formData, setFormData] = useState(initialForm);
+const [formError, setFormError] = useState("");
+const [formSuccess, setFormSuccess] = useState("");
+const [isSubmitting, setIsSubmitting] = useState(false);
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target;
 
@@ -78,57 +80,115 @@ function BecomeViewer() {
     setFormError("");
   };
 
-  const handleSubmit = (event) => {
-    event.preventDefault();
-    setFormError("");
+  
+const handleSubmit = async (event) => {
+  event.preventDefault();
 
-    const requiredFields = [
-      "firstName",
-      "lastName",
-      "email",
-      "phone",
-      "city",
-      "coverageAreas",
-      "availability",
-    ];
+  if (isSubmitting) return;
 
-    const hasMissingField = requiredFields.some(
-      (field) => !formData[field].trim()
-    );
+  setFormError("");
+  setFormSuccess("");
 
-    if (hasMissingField) {
-      setFormError("Please complete all required fields.");
-      return;
-    }
+  const requiredFields = [
+    "firstName",
+    "lastName",
+    "email",
+    "phone",
+    "city",
+    "coverageAreas",
+    "availability",
+  ];
 
-    if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())
-    ) {
-      setFormError("Please enter a valid email address.");
-      return;
-    }
+  const hasMissingField = requiredFields.some(
+    (field) => !formData[field].trim()
+  );
 
-    if (
-      !/^\+?[0-9()\s-]{7,25}$/.test(formData.phone.trim())
-    ) {
-      setFormError("Please enter a valid phone number.");
-      return;
-    }
+  if (hasMissingField) {
+    setFormError("Please complete all required fields.");
+    return;
+  }
 
-    if (!formData.consent) {
-      setFormError(
-        "Please acknowledge the privacy notice before continuing."
-      );
-      return;
-    }
+  const email = formData.email.trim();
 
-    // Backend submission will be implemented later.
-    // Do not display a success message until an API
-    // confirms that the application was saved.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    setFormError("Please enter a valid email address.");
+    return;
+  }
+
+  const phone = formData.phone.trim();
+
+  if (!/^\+?[0-9()\s-]{7,25}$/.test(phone)) {
+    setFormError("Please enter a valid phone number.");
+    return;
+  }
+
+  if (!formData.consent) {
     setFormError(
-      "The application form is not accepting submissions yet. Please contact ViewForMe directly for enquiries."
+      "Please acknowledge the privacy notice before continuing."
     );
+    return;
+  }
+
+  const coverageAreas = formData.coverageAreas
+    .split(",")
+    .map((area) => area.trim())
+    .filter(Boolean);
+
+  if (
+    coverageAreas.length === 0 ||
+    coverageAreas.length > 20 ||
+    coverageAreas.some(
+      (area) => area.length < 2 || area.length > 100
+    )
+  ) {
+    setFormError(
+      "Please provide between 1 and 20 valid coverage areas."
+    );
+    return;
+  }
+
+  const payload = {
+    fullName: `${formData.firstName.trim()} ${formData.lastName.trim()}`,
+    email,
+    phone,
+    city: formData.city.trim(),
+    coverageAreas,
+    availability: formData.availability,
+    ...(formData.transport && {
+      transport: formData.transport,
+    }),
+    experience: formData.experience.trim(),
+    motivation: formData.motivation.trim(),
+    consent: true,
   };
+
+  try {
+    setIsSubmitting(true);
+
+    const response = await submitViewerApplication(payload);
+
+    if (response.success) {
+      setFormSuccess(
+        response.message ||
+          "Your application has been submitted successfully."
+      );
+
+      setFormData({ ...initialForm });
+    } else {
+      setFormError(
+        response.message || "Unable to submit your application."
+      );
+    }
+  } catch (error) {
+    setFormError(
+      error.message ||
+        "Unable to submit your application. Please try again."
+    );
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
 
   return (
     <div className="bg-white">
@@ -677,17 +737,27 @@ function BecomeViewer() {
               </p>
             )}
 
+            {formSuccess && (
+  <div
+    role="status"
+    className="mt-6 flex items-start gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800"
+  >
+    <CheckCircle2 size={20} className="shrink-0" />
+    <p>{formSuccess}</p>
+  </div>
+)}
+
             <button
-              type="submit"
-              className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-4 font-semibold text-white transition hover:bg-[#238579]"
-            >
-              <Send size={19} />
-              Submit Application
-            </button>
+  type="submit"
+  disabled={isSubmitting}
+  className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-4 font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-60"
+>
+  <Send size={19} />
+  {isSubmitting ? "Submitting Application..." : "Submit Application"}
+</button>
 
             <p className="mt-4 text-center text-xs leading-6 text-slate-500">
-              Online submissions will be enabled when
-              the application backend is connected.
+              Complete and submit the online application form with your personal details, coverage areas, and availability.
             </p>
           </form>
         </div>

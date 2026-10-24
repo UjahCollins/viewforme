@@ -68,6 +68,10 @@ export function normalizeAdminBookingDetails(data) {
 
     confirmedAt: data.confirmedAt ?? null,
 
+    // Cancellation
+cancelledAt: data.cancelledAt ?? null,
+cancellationReason: data.cancellationReason ?? "",
+
     // Access
     accessContactName:
       data.accessContactName ?? "",

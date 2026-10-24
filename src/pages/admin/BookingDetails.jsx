@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -24,12 +24,11 @@ import {
 import StatusBadge from "../../components/admin/StatusBadge";
 import BookingProgress from "../../components/admin/BookingProgress";
 
+import {bookingDetailsExtras,} from "../../data/adminMockData";
+import { getAdminViewers } from "../../services/adminViewerApi.js";
 import {
-  availableViewers,
-  bookingDetailsExtras,
-} from "../../data/adminMockData";
-
-import { getAdminBookingById } from "../../services/adminBookingApi.js";
+  createAdminAssignment, cancelAdminAssignment} from "../../services/adminAssignmentApi.js";
+import { getAdminBookingById, confirmAdminBooking, cancelAdminBooking,completeAdminBooking,deliverAdminBookingReport,} from "../../services/adminBookingApi.js";
 
 import { normalizeAdminBookingDetails } from "../../utils/normalizeAdminBookingDetails.js";
 
@@ -104,6 +103,21 @@ const { id } = useParams();
 const [booking, setBooking] = useState(null);
 const [loading, setLoading] = useState(true);
 const [error, setError] = useState("");
+const [confirming, setConfirming] = useState(false);
+const [cancelling, setCancelling] = useState(false);
+const [completing, setCompleting] = useState(false);
+const [deliveringReport, setDeliveringReport] = useState(false);
+const [showCancelForm, setShowCancelForm] = useState(false);
+const [cancellationReason, setCancellationReason] = useState("");
+const [viewers, setViewers] = useState([]);
+const [viewersLoading, setViewersLoading] = useState(false);
+const [viewersError, setViewersError] = useState("");
+const [assigningViewer, setAssigningViewer] = useState(false);
+const [assignmentError, setAssignmentError] = useState("");
+const [assignmentSuccess, setAssignmentSuccess] = useState("");
+const [cancellingAssignment, setCancellingAssignment] = useState(false);
+const [showAssignmentCancelForm, setShowAssignmentCancelForm] = useState(false);
+const [assignmentCancelReason, setAssignmentCancelReason] = useState("");
 
 useEffect(() => {
   let active = true;
@@ -148,6 +162,56 @@ useEffect(() => {
   };
 }, [id]);
 
+useEffect(() => {
+  let active = true;
+
+  async function loadViewers() {
+    setViewersLoading(true);
+    setViewersError("");
+
+    try {
+      const allViewers = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const response = await getAdminViewers({
+          status: "ACTIVE",
+          page,
+          limit: 100,
+        });
+
+        if (!active) return;
+
+        allViewers.push(...(response.data || []));
+
+        totalPages = response.pagination?.totalPages || 1;
+        page += 1;
+      } while (page <= totalPages);
+
+      if (active) {
+        setViewers(allViewers);
+      }
+    } catch (error) {
+      if (active) {
+        setViewersError(
+          error.message || "Unable to load viewers."
+        );
+      }
+    } finally {
+      if (active) {
+        setViewersLoading(false);
+      }
+    }
+  }
+
+  loadViewers();
+
+  return () => {
+    active = false;
+  };
+}, []);
+
 
   const extras = bookingDetailsExtras[id] || {};
 
@@ -163,14 +227,17 @@ useEffect(() => {
   });
 
   const [notice, setNotice] = useState("");
-
+  const noticeRef = useRef(null);
   
 useEffect(() => {
   if (!booking) return;
 
   setForm({
     status: booking.status,
-    viewer: booking.viewer || "",
+    viewer:
+  (booking.assignments || []).find((assignment) =>
+    ["ASSIGNED", "ACCEPTED"].includes(assignment.status)
+  )?.viewerId || "",
     accessStatus: extras.accessStatus || "Not Arranged",
     confirmedDate: extras.confirmedDate || "",
     confirmedTime: extras.confirmedTime || "",
@@ -179,7 +246,7 @@ useEffect(() => {
     internalNotes: extras.internalNotes || "",
   });
 
-  setNotice("");
+  
 }, [booking, id]);
 
 
@@ -221,27 +288,51 @@ if (loading) {
     );
   }
 
-  const matchingViewers = availableViewers.filter(
-    (viewer) =>
-      viewer.status === "Active" &&
-      viewer.coverageAreas.some(
-        (area) =>
-          area.toLowerCase() ===
-          booking.location.toLowerCase()
-      )
-  );
+const bookingCity = (
+  booking.propertyCity ||
+  booking.city ||
+  ""
+).trim().toLowerCase();
 
-  const assignedViewer = availableViewers.find(
-    (viewer) => viewer.name === form.viewer
-  );
+const matchingViewers = viewers.filter((viewer) => {
+  if (viewer.status !== "ACTIVE") return false;
 
-  const viewerOptions =
-    assignedViewer &&
-    !matchingViewers.some(
-      (viewer) => viewer.id === assignedViewer.id
-    )
-      ? [assignedViewer, ...matchingViewers]
-      : matchingViewers;
+  const viewerLocations = [
+    viewer.city,
+    ...(viewer.coverageAreas || []),
+  ]
+    .filter(Boolean)
+    .map((area) => area.trim().toLowerCase());
+
+  return (
+    Boolean(bookingCity) &&
+    viewerLocations.includes(bookingCity)
+  );
+});
+
+const assignedViewer = viewers.find(
+  (viewer) => viewer.id === form.viewer
+);
+
+const viewerOptions =
+  assignedViewer &&
+  !matchingViewers.some(
+    (viewer) => viewer.id === assignedViewer.id
+  )
+    ? [assignedViewer, ...matchingViewers]
+    : matchingViewers;
+
+    const activeAssignment = (booking.assignments || []).find(
+  (assignment) =>
+    ["ASSIGNED", "ACCEPTED"].includes(assignment.status)
+);
+
+const assignedViewerName =
+  activeAssignment?.viewer?.fullName ||
+  viewers.find(
+    (viewer) => viewer.id === activeAssignment?.viewerId
+  )?.fullName ||
+  "Unknown Viewer";
 
   const updateField = (name, value) => {
     setForm((previous) => ({
@@ -290,6 +381,362 @@ if (loading) {
     );
   };
 
+  
+const handleConfirmBooking = async () => {
+  if (!booking?.id || confirming) return;
+
+  const confirmed = window.confirm(
+    `Are you sure you want to confirm booking ${booking.reference}?`
+  );
+
+  if (!confirmed) return;
+
+  setConfirming(true);
+  setNotice("");
+
+  try {
+    await confirmAdminBooking(booking.id);
+
+    // Fetch the updated booking from the backend.
+    const response = await getAdminBookingById(booking.id);
+
+    setBooking(
+      normalizeAdminBookingDetails(response.data)
+    );
+
+    setNotice("Booking confirmed successfully.");
+  } catch (error) {
+    setNotice(
+      error.message || "Unable to confirm booking."
+    );
+  } finally {
+    setConfirming(false);
+  }
+};
+
+
+
+const handleCancelBooking = async () => {
+  const reason = cancellationReason.trim();
+
+  if (reason.length < 5 || reason.length > 1000) {
+    setNotice(
+      "Please provide a cancellation reason between 5 and 1000 characters."
+    );
+    return;
+  }
+
+  if (!booking?.id || cancelling) return;
+
+  const confirmed = window.confirm(
+    `Are you sure you want to cancel booking ${booking.reference}?`
+  );
+
+  if (!confirmed) return;
+
+  setCancelling(true);
+  setNotice("");
+
+  try {
+    const result = await cancelAdminBooking(booking.id, reason);
+
+    // The cancellation request has succeeded.
+    const refundRequired =
+      result?.refundRequired ??
+      result?.data?.refundRequired ??
+      false;
+
+    const successMessage = refundRequired
+      ? "Booking cancelled successfully. A payment refund may be required and must be handled separately."
+      : "Booking cancelled successfully.";
+
+    // Update the booking from the cancellation response first.
+    const updatedBooking = result?.data?.id
+      ? result.data
+      : result?.data?.data;
+
+    if (updatedBooking?.id) {
+      setBooking(normalizeAdminBookingDetails(updatedBooking));
+    }
+
+    setShowCancelForm(false);
+    setCancellationReason("");
+
+    // Display success immediately, independently of the refresh.
+    setNotice(successMessage);
+    requestAnimationFrame(() => {
+  noticeRef.current?.scrollIntoView({
+    behavior: "smooth",
+    block: "center",
+  });
+});
+
+    // Refresh booking details without allowing a refresh failure
+    // to overwrite the successful cancellation message.
+    try {
+      const response = await getAdminBookingById(booking.id);
+
+      if (response?.data) {
+        setBooking(normalizeAdminBookingDetails(response.data));
+      }
+    } catch (refreshError) {
+      console.error(
+        "Booking cancelled, but refreshing details failed:",
+        refreshError
+      );
+    }
+  } catch (error) {
+    setNotice(error.message || "Unable to cancel booking.");
+  } finally {
+    setCancelling(false);
+  }
+};
+
+const handleCompleteBooking = async () => {
+  if (!booking?.id || completing) return;
+
+  const confirmed = window.confirm(
+    `Are you sure the viewing for booking ${booking.reference} has been completed?`
+  );
+
+  if (!confirmed) return;
+
+  setCompleting(true);
+  setNotice("");
+
+  try {
+    const result = await completeAdminBooking(booking.id);
+
+    if (result?.data?.id) {
+      setBooking(normalizeAdminBookingDetails(result.data));
+    }
+
+    setNotice("Booking marked as completed successfully.");
+
+    requestAnimationFrame(() => {
+      noticeRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+
+    try {
+      const response = await getAdminBookingById(booking.id);
+
+      if (response?.data) {
+        setBooking(normalizeAdminBookingDetails(response.data));
+      }
+    } catch (refreshError) {
+      console.error(
+        "Booking completed, but refreshing details failed:",
+        refreshError
+      );
+    }
+  } catch (error) {
+    setNotice(
+      error.message || "Unable to mark booking as completed."
+    );
+  } finally {
+    setCompleting(false);
+  }
+};
+
+const handleDeliverReport = async () => {
+  if (!booking?.id || deliveringReport) return;
+
+  if (booking.rawStatus !== "COMPLETED") {
+    setNotice("Complete the booking before recording report delivery.");
+    return;
+  }
+
+  const alreadyDelivered = (booking.reports || []).some(
+    (report) => report.status === "DELIVERED"
+  );
+
+  if (alreadyDelivered) {
+    setNotice("The viewing report has already been delivered.");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Have you already sent the viewing report for booking ${booking.reference} to the customer?`
+  );
+
+  if (!confirmed) return;
+
+  setDeliveringReport(true);
+  setNotice("");
+
+  try {
+    const result = await deliverAdminBookingReport(booking.id);
+
+    // Update the report immediately using the successful response.
+    if (result?.data?.id) {
+      setBooking((previous) => ({
+        ...previous,
+        reports: [...(previous.reports || []), result.data],
+      }));
+    }
+
+    setNotice("Viewing report marked as delivered successfully.");
+
+    requestAnimationFrame(() => {
+      noticeRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+
+    // Refresh the booking from the database.
+    try {
+      const response = await getAdminBookingById(booking.id);
+
+      if (response?.data) {
+        setBooking(normalizeAdminBookingDetails(response.data));
+      }
+    } catch (refreshError) {
+      console.error(
+        "Report delivered, but refreshing booking failed:",
+        refreshError
+      );
+    }
+  } catch (error) {
+    setNotice(
+      error.message || "Unable to mark the report as delivered."
+    );
+  } finally {
+    setDeliveringReport(false);
+  }
+};
+
+const handleAssignViewer = async () => {
+  const viewerId = form.viewer;
+
+  if (booking.rawStatus !== "CONFIRMED") {
+    setAssignmentError(
+      "Only confirmed bookings can be assigned to viewers."
+    );
+    return;
+  }
+
+  if (!viewerId) {
+    setAssignmentError("Please select a viewer.");
+    return;
+  }
+
+  if (activeAssignment) {
+    setAssignmentError(
+      "This booking already has an active viewer assignment."
+    );
+    return;
+  }
+
+  if (assigningViewer) return;
+
+  const selectedViewer = viewers.find(
+    (viewer) => viewer.id === viewerId
+  );
+
+  const confirmed = window.confirm(
+    `Assign ${selectedViewer?.fullName || "this viewer"} to booking ${booking.reference}?`
+  );
+
+  if (!confirmed) return;
+
+  setAssigningViewer(true);
+  setAssignmentError("");
+  setAssignmentSuccess("");
+
+  try {
+    await createAdminAssignment({
+      bookingId: booking.id,
+      viewerId,
+    });
+
+    setAssignmentSuccess(
+      "Viewer assigned to booking successfully."
+    );
+
+    // Refresh the booking to retrieve the saved assignment.
+    try {
+      const response = await getAdminBookingById(booking.id);
+
+      if (response?.data) {
+        setBooking(
+          normalizeAdminBookingDetails(response.data)
+        );
+      }
+    } catch (refreshError) {
+      console.error(
+        "Viewer assigned, but refreshing booking failed:",
+        refreshError
+      );
+    }
+  } catch (error) {
+    setAssignmentError(
+      error.message || "Unable to assign viewer."
+    );
+  } finally {
+    setAssigningViewer(false);
+  }
+};
+
+const handleCancelAssignment = async () => {
+  const reason = assignmentCancelReason.trim();
+
+  if (!activeAssignment?.id || cancellingAssignment) return;
+
+  if (reason.length < 5 || reason.length > 2000) {
+    setAssignmentError(
+      "Please provide a cancellation reason between 5 and 2000 characters."
+    );
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Cancel the viewer assignment for booking ${booking.reference}?`
+  );
+
+  if (!confirmed) return;
+
+  setCancellingAssignment(true);
+  setAssignmentError("");
+  setAssignmentSuccess("");
+
+  try {
+    await cancelAdminAssignment(activeAssignment.id, reason);
+
+    setAssignmentSuccess(
+      "Viewer assignment cancelled successfully."
+    );
+
+    setShowAssignmentCancelForm(false);
+    setAssignmentCancelReason("");
+
+    // Refresh booking details to reflect the cancelled assignment.
+    try {
+      const response = await getAdminBookingById(booking.id);
+
+      if (response?.data) {
+        setBooking(
+          normalizeAdminBookingDetails(response.data)
+        );
+      }
+    } catch (refreshError) {
+      console.error(
+        "Assignment cancelled, but refreshing booking failed:",
+        refreshError
+      );
+    }
+  } catch (error) {
+    setAssignmentError(
+      error.message || "Unable to cancel viewer assignment."
+    );
+  } finally {
+    setCancellingAssignment(false);
+  }
+};
+
   const canDeliver =
     form.status === "Completed" &&
     form.reportStatus === "Ready";
@@ -313,7 +760,7 @@ if (loading) {
               Booking {booking.reference || booking.id}
             </h1>
 
-            <StatusBadge status={form.status} />
+            <StatusBadge status={booking.status} />
           </div>
 
           <p className="mt-2 text-sm text-slate-600">
@@ -321,36 +768,120 @@ if (loading) {
           </p>
 
           <p className="mt-2 text-xs font-semibold text-amber-700">
-            Frontend demo — changes are not persisted
+             Booking information is retrieved from the ViewForMe system.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handleSave}
-          className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#238579]"
-        >
-          <Save size={18} />
-          Validate Changes
-        </button>
+        {booking.rawStatus === "AWAITING_CONFIRMATION" && (
+  <button
+    type="button"
+    onClick={handleConfirmBooking}
+    disabled={confirming}
+    className="rounded-xl bg-emerald-600 px-5 py-3 font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+  >
+    {confirming ? "Confirming..." : "Confirm Booking"}
+  </button>
+)}
+{!["CANCELLED", "COMPLETED"].includes(
+  booking.rawStatus
+) && (
+  <button
+    type="button"
+    onClick={() => setShowCancelForm(true)}
+    disabled={cancelling || confirming}
+    className="rounded-xl border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+  >
+    Cancel Booking
+  </button>
+)}
       </div>
 
-      {/* NOTICE */}
-      {notice && (
-        <div
-          role="status"
-          className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4"
-        >
-          <AlertCircle
-            size={20}
-            className="mt-0.5 shrink-0 text-blue-700"
-          />
 
-          <p className="text-sm leading-7 text-blue-800">
-            {notice}
-          </p>
-        </div>
-      )}
+{showCancelForm && (
+  <section className="rounded-2xl border border-red-200 bg-red-50 p-6">
+    <h2 className="text-lg font-bold text-red-800">
+      Cancel Booking
+    </h2>
+
+    <p className="mt-2 text-sm leading-6 text-red-700">
+      Please provide the reason for cancelling this
+      booking. This action will update the booking
+      status in the ViewForMe system.
+    </p>
+
+    <label
+      htmlFor="cancellation-reason"
+      className="mt-5 block text-sm font-semibold text-red-800"
+    >
+      Cancellation Reason
+    </label>
+
+    <textarea
+      id="cancellation-reason"
+      value={cancellationReason}
+      onChange={(event) =>
+        setCancellationReason(event.target.value)
+      }
+      rows={4}
+      maxLength={1000}
+      placeholder="Enter the reason for cancellation..."
+      className="mt-2 w-full rounded-xl border border-red-200 bg-white px-4 py-3 text-sm outline-none focus:border-red-400"
+    />
+
+    <p className="mt-2 text-xs text-red-600">
+      {cancellationReason.trim().length}/1000 characters
+      (minimum 5)
+    </p>
+
+    <div className="mt-5 flex flex-wrap gap-3">
+      <button
+        type="button"
+        onClick={handleCancelBooking}
+        disabled={
+          cancelling ||
+          cancellationReason.trim().length < 5
+        }
+        className="rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {cancelling
+          ? "Cancelling..."
+          : "Confirm Cancellation"}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => {
+          setShowCancelForm(false);
+          setCancellationReason("");
+        }}
+        disabled={cancelling}
+        className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+      >
+        Keep Booking
+      </button>
+    </div>
+  </section>
+)}
+
+
+      {/* NOTICE */}
+{notice && (
+  <div
+    ref={noticeRef}
+    role="status"
+    aria-live="polite"
+    className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4"
+  >
+    <CheckCircle2
+      size={20}
+      className="mt-0.5 shrink-0 text-emerald-700"
+    />
+
+    <p className="text-sm leading-7 text-emerald-800">
+      {notice}
+    </p>
+  </div>
+)}
 
       {/* PROGRESS */}
       <section className="rounded-2xl border border-slate-200 bg-white p-6">
@@ -358,13 +889,14 @@ if (loading) {
           Booking Progress
         </h2>
 
-        <BookingProgress
-          paymentStatus={booking.paymentStatus}
-          accessStatus={form.accessStatus}
-          viewer={form.viewer}
-          status={form.status}
-          reportDelivered={form.reportDelivered}
-        />
+     <BookingProgress
+  paymentStatus={booking.paymentStatus}
+  viewer={form.viewer}
+  status={booking.status}
+ reportDelivered={(booking.reports || []).some(
+  (report) => report.status === "DELIVERED"
+)}
+/>
       </section>
 
       {/* MAIN GRID */}
@@ -416,7 +948,7 @@ if (loading) {
             />
 
             <InfoRow
-              label="Property Type"
+              label="Postcode"
               value={booking.propertyPostcode}
             />
 
@@ -615,6 +1147,11 @@ if (loading) {
             <select
               id="assigned-viewer"
               value={form.viewer}
+              disabled={
+  assigningViewer ||
+  Boolean(activeAssignment) ||
+  booking.rawStatus !== "CONFIRMED"
+}
               onChange={(event) =>
                 updateField("viewer", event.target.value)
               }
@@ -624,15 +1161,147 @@ if (loading) {
                 No Viewer Assigned
               </option>
 
-              {viewerOptions.map((viewer) => (
-                <option
-                  key={viewer.id}
-                  value={viewer.name}
-                >
-                  {viewer.name} — {viewer.location}
-                </option>
-              ))}
+             {viewerOptions.map((viewer) => (
+  <option
+    key={viewer.id}
+    value={viewer.id}
+  >
+    {viewer.fullName} — {viewer.city || "Location not specified"}
+  </option>
+))}
             </select>
+
+            {booking.rawStatus === "CONFIRMED" &&
+  !activeAssignment && (
+    <button
+      type="button"
+      onClick={handleAssignViewer}
+      disabled={
+        assigningViewer ||
+        !form.viewer ||
+        viewersLoading ||
+        Boolean(viewersError)
+      }
+      className="mt-4 rounded-xl bg-[#2A9D8F] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {assigningViewer
+        ? "Assigning Viewer..."
+        : "Assign Viewer"}
+    </button>
+  )}
+
+  {activeAssignment && (
+  <div className="mt-4 rounded-xl border border-teal-200 bg-teal-50 p-4">
+    <p className="text-sm font-semibold text-teal-800">
+      Assigned Viewer: {assignedViewerName}
+    </p>
+
+    <p className="mt-1 text-xs text-teal-700">
+      Assignment Status: {activeAssignment.status}
+    </p>
+  </div>
+)}
+
+{activeAssignment && !showAssignmentCancelForm && (
+  <button
+    type="button"
+    onClick={() => {
+      setAssignmentError("");
+      setShowAssignmentCancelForm(true);
+    }}
+    className="mt-4 rounded-xl border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700 hover:bg-red-100"
+  >
+    Cancel Viewer Assignment
+  </button>
+)}
+
+{activeAssignment && showAssignmentCancelForm && (
+  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+    <label
+      htmlFor="assignment-cancel-reason"
+      className="block text-sm font-semibold text-red-800"
+    >
+      Reason for Cancelling Assignment
+    </label>
+
+    <textarea
+      id="assignment-cancel-reason"
+      value={assignmentCancelReason}
+      onChange={(event) =>
+        setAssignmentCancelReason(event.target.value)
+      }
+      rows={3}
+      maxLength={2000}
+      placeholder="Enter the reason for cancelling this assignment..."
+      className={`${inputClass} mt-2`}
+    />
+
+    <p className="mt-2 text-xs text-red-600">
+      {assignmentCancelReason.trim().length}/2000 characters
+      (minimum 5)
+    </p>
+
+    <div className="mt-4 flex flex-wrap gap-3">
+      <button
+        type="button"
+        onClick={handleCancelAssignment}
+        disabled={
+          cancellingAssignment ||
+          assignmentCancelReason.trim().length < 5
+        }
+        className="rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {cancellingAssignment
+          ? "Cancelling..."
+          : "Confirm Assignment Cancellation"}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => {
+          setShowAssignmentCancelForm(false);
+          setAssignmentCancelReason("");
+          setAssignmentError("");
+        }}
+        disabled={cancellingAssignment}
+        className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+      >
+        Keep Assignment
+      </button>
+    </div>
+  </div>
+)}
+
+{assignmentSuccess && (
+  <p role="status" className="mt-3 text-sm text-emerald-700">
+    {assignmentSuccess}
+  </p>
+)}
+
+{assignmentError && (
+  <p role="alert" className="mt-3 text-sm text-red-600">
+    {assignmentError}
+  </p>
+)}
+
+{booking.rawStatus !== "CONFIRMED" &&
+  !activeAssignment && (
+    <p className="mt-3 text-sm text-amber-700">
+      Confirm this booking before assigning a viewer.
+    </p>
+  )}
+
+            {viewersLoading && (
+  <p className="mt-3 text-sm text-slate-500">
+    Loading available viewers...
+  </p>
+)}
+
+{viewersError && (
+  <p className="mt-3 text-sm text-red-600">
+    {viewersError}
+  </p>
+)}
 
             <p className="mt-3 text-xs leading-6 text-slate-500">
               Viewers are filtered by their listed
@@ -640,10 +1309,12 @@ if (loading) {
               must be confirmed separately.
             </p>
 
-            {matchingViewers.length === 0 && (
+           {!viewersLoading &&
+  !viewersError &&
+  matchingViewers.length === 0 && (
               <div className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-800">
-                No active viewers currently match
-                this location in the demo data.
+                No active viewers currently cover
+this property's city.
               </div>
             )}
           </DetailCard>
@@ -699,28 +1370,44 @@ if (loading) {
               </div>
             </div>
 
-            <label className="mt-6 flex items-start gap-3">
-              <input
-                type="checkbox"
-                checked={form.reportDelivered}
-                disabled={
-                  !canDeliver &&
-                  !form.reportDelivered
-                }
-                onChange={(event) =>
-                  updateField(
-                    "reportDelivered",
-                    event.target.checked
-                  )
-                }
-                className="mt-1 h-4 w-4 accent-[#2A9D8F]"
-              />
+           {(() => {
+  const deliveredReport = (booking.reports || []).find(
+    (report) => report.status === "DELIVERED"
+  );
 
-              <span className="text-sm leading-7 text-slate-600">
-                Mark report as delivered to customer
-                (demo record only)
-              </span>
-            </label>
+  return deliveredReport ? (
+    <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+      <div className="flex items-center gap-2 text-emerald-800">
+        <CheckCircle2 size={20} />
+
+        <span className="text-sm font-semibold">
+          Report Delivered Successfully
+        </span>
+      </div>
+
+      <p className="mt-2 text-sm text-emerald-700">
+        Delivered on: {formatDate(deliveredReport.deliveredAt)}
+      </p>
+    </div>
+  ) : booking.rawStatus === "COMPLETED" ? (
+    <button
+      type="button"
+      onClick={handleDeliverReport}
+      disabled={deliveringReport}
+      className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <CheckCircle2 size={18} />
+
+      {deliveringReport
+        ? "Recording Delivery..."
+        : "Mark Report as Delivered"}
+    </button>
+  ) : (
+    <p className="mt-6 text-sm text-amber-700">
+      Complete the booking before recording report delivery.
+    </p>
+  );
+})()}
 
             <p className="mt-4 text-xs leading-6 text-slate-500">
               Viewing photographs, videos, and notes
@@ -730,30 +1417,6 @@ if (loading) {
             </p>
           </DetailCard>
 
-          {/* INTERNAL NOTES */}
-          <DetailCard
-            title="Internal Administration Notes"
-            icon={MessageSquare}
-          >
-            <textarea
-              value={form.internalNotes}
-              onChange={(event) =>
-                updateField(
-                  "internalNotes",
-                  event.target.value
-                )
-              }
-              rows={5}
-              placeholder="Add internal coordination notes..."
-              className={`${inputClass} resize-y`}
-            />
-
-            <p className="mt-3 text-xs text-slate-500">
-              Notes are temporary in this frontend demo.
-              Do not enter real personal or confidential
-              information.
-            </p>
-          </DetailCard>
         </div>
 
         {/* RIGHT SIDEBAR */}
@@ -770,42 +1433,45 @@ if (loading) {
               Current Status
             </label>
 
-            <select
-              id="booking-status"
-              value={form.status}
-              onChange={(event) =>
-                updateField("status", event.target.value)
-              }
-              className={inputClass}
-            >
-              {[
-                "Pending",
-                "Assigned",
-                "Confirmed",
-                "In Progress",
-                "Completed",
-                "Cancelled",
-              ].map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+  <StatusBadge status={booking.status} />
+</div>
+
+{["CONFIRMED", "IN_PROGRESS"].includes(
+  booking.rawStatus
+) && (
+  <button
+    type="button"
+    onClick={handleCompleteBooking}
+    disabled={completing || confirming || cancelling}
+    className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+  >
+    <CheckCircle2 size={18} />
+    {completing
+      ? "Completing Booking..."
+      : "Mark as Completed"}
+  </button>
+)}
+{booking.rawStatus === "CANCELLED" && (
+  <div className="mt-5 space-y-2">
+    <InfoRow
+      label="Cancelled On"
+      value={formatDate(booking.cancelledAt)}
+    />
+
+    <InfoRow
+      label="Cancellation Reason"
+      value={booking.cancellationReason}
+    />
+  </div>
+)}
 
             <p className="mt-4 text-xs leading-6 text-slate-500">
               Booking status and payment status
               are managed separately.
             </p>
 
-            {!canConfirm &&
-              ["Confirmed", "In Progress", "Completed"].includes(
-                form.status
-              ) && (
-                <div className="mt-4 rounded-xl bg-amber-50 p-4 text-xs leading-6 text-amber-800">
-                  Confirmation requirements
-                  are not yet satisfied.
-                </div>
-              )}
+            
           </DetailCard>
 
           {/* PAYMENT */}
@@ -838,10 +1504,8 @@ if (loading) {
 />
 
             <p className="mt-4 text-xs leading-6 text-slate-500">
-              Payment status is read-only in this
-              demonstration. Real payment information
-              will be verified through the backend
-              and payment provider.
+               Payment information is retrieved from the ViewForMe
+  backend and updated through Stripe payment processing.
             </p>
           </DetailCard>
 
@@ -861,9 +1525,13 @@ if (loading) {
             />
 
             <InfoRow
-              label="Assigned Viewer"
-              value={form.viewer || "Not Assigned"}
-            />
+  label="Assigned Viewer"
+  value={
+    activeAssignment
+      ? assignedViewerName
+      : "Not Assigned"
+  }
+/>
 
             <InfoRow
               label="Confirmed Date"
@@ -897,21 +1565,7 @@ if (loading) {
         </div>
       </div>
 
-      {/* BOTTOM ACTION */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-6">
-        <p className="text-sm text-slate-500">
-          Changes are temporary until backend integration.
-        </p>
-
-        <button
-          type="button"
-          onClick={handleSave}
-          className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-3 text-sm font-semibold text-white hover:bg-[#238579]"
-        >
-          <Save size={18} />
-          Validate Changes
-        </button>
-      </div>
+    
     </div>
   );
 }

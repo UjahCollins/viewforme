@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect} from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -18,18 +18,26 @@ import {
 
 import StatusBadge from "../../components/admin/StatusBadge";
 
-import {
-  viewerProfiles,
-  viewerAssignmentHistory,
-} from "../../data/adminMockData";
+import { getAdminViewerById, updateAdminViewer, updateAdminViewerStatus,} from "../../services/adminViewerService";
 
-const formatDate = (value) =>
-  new Intl.DateTimeFormat("en-GB", {
+
+const formatDate = (value) => {
+  if (!value) return "Not available";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Not available";
+  }
+
+  return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
     timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+  }).format(date);
+};
+
 
 function InfoRow({ label, value }) {
   return (
@@ -48,19 +56,118 @@ function InfoRow({ label, value }) {
 function ViewerDetails() {
   const { id } = useParams();
 
-  const viewer = viewerProfiles.find(
-    (item) => item.id === id
-  );
+ 
+const [viewer, setViewer] = useState(null);
+const [status, setStatus] = useState("Active");
+const [notes, setNotes] = useState("");
+const [notice, setNotice] = useState("");
+const [error, setError] = useState("");
+const [loading, setLoading] = useState(true);
+const [saving, setSaving] = useState(false);
 
-  const [status, setStatus] = useState(
-    viewer?.status || "Inactive"
-  );
+useEffect(() => {
+  let cancelled = false;
 
-  const [notes, setNotes] = useState(
-    viewer?.notes || ""
-  );
+  const fetchViewer = async () => {
+    setLoading(true);
+    setError("");
 
-  const [notice, setNotice] = useState("");
+    try {
+      const response = await getAdminViewerById(id);
+
+      if (cancelled) return;
+
+      if (!response.success || !response.data) {
+        throw new Error("Unable to retrieve viewer details.");
+      }
+
+      const data = response.data;
+
+      const formattedViewer = {
+        ...data,
+        name: data.fullName || "Unknown Viewer",
+        location: data.city || "Not provided",
+        coverageAreas: data.coverageAreas || [],
+        availability: ({
+          weekdays: "Weekdays",
+          weekends: "Weekends",
+          both: "Weekdays and Weekends",
+          flexible: "Flexible",
+        })[data.availability?.toLowerCase()] || "Not provided",
+        transport: ({
+          "own-vehicle": "Own Vehicle",
+          "public-transport": "Public Transport",
+          "walking-cycling": "Walking / Cycling",
+          other: "Other Arrangements",
+        })[data.transport?.toLowerCase()] || "Not provided",
+        joinedAt: data.createdAt,
+        
+totalAssignments: data._count?.assignments ?? 0,
+
+completedViewings: Array.isArray(data.assignments)
+  ? data.assignments.filter(
+      (assignment) => assignment.status === "COMPLETED"
+    ).length
+  : 0,
+
+assignments: Array.isArray(data.assignments)
+  ? data.assignments.map((assignment) => ({
+      id: assignment.id,
+      bookingId: assignment.booking?.id,
+      reference: assignment.booking?.reference ?? "N/A",
+      service: assignment.booking?.service?.name ?? "Unknown Service",
+      location: [
+        assignment.booking?.propertyAddress,
+        assignment.booking?.propertyCity,
+      ]
+        .filter(Boolean)
+        .join(", "),
+      date: assignment.assignedAt,
+      preferredDate: assignment.booking?.preferredDate,
+      status: assignment.status,
+      completedAt: assignment.completedAt,
+    }))
+  : [],
+
+      };
+
+      setViewer(formattedViewer);
+
+      setStatus(
+        data.status
+          ? data.status.charAt(0).toUpperCase() +
+              data.status.slice(1).toLowerCase()
+          : "Inactive"
+      );
+
+      setNotes(data.notes || "");
+    } catch (err) {
+      if (!cancelled) {
+        setError(err.message || "Unable to load viewer.");
+      }
+    } finally {
+      if (!cancelled) {
+        setLoading(false);
+      }
+    }
+  };
+
+  fetchViewer();
+
+  return () => {
+    cancelled = true;
+  };
+}, [id]);
+
+
+if (loading) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center text-slate-600">
+      Loading viewer details...
+    </div>
+  );
+}
+
 
   if (!viewer) {
     return (
@@ -74,6 +181,12 @@ function ViewerDetails() {
           Viewer Not Found
         </h1>
 
+        {error && (
+  <p className="mt-3 text-sm text-red-600">
+    {error}
+  </p>
+)}
+
         <Link
           to="/admin/viewers"
           className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-[#2A9D8F]"
@@ -85,15 +198,79 @@ function ViewerDetails() {
     );
   }
 
-  const assignments = viewerAssignmentHistory.filter(
-    (assignment) => assignment.viewerId === viewer.id
-  );
+const assignments = viewer.assignments ?? [];
+console.log("VIEWER ASSIGNMENTS:", assignments);
 
-  const handleValidate = () => {
-    setNotice(
-      "Demo changes are held in this page's React state only. No viewer record has been updated on a server."
+  
+const handleValidate = async () => {
+  if (!viewer || saving) return;
+
+  const nextStatus = status.toUpperCase();
+  const currentStatus = viewer.status?.toUpperCase();
+
+  const statusChanged = nextStatus !== currentStatus;
+  const notesChanged = notes !== (viewer.notes ?? "");
+
+  if (!statusChanged && !notesChanged) {
+    setNotice("No changes to save.");
+    return;
+  }
+
+  if (
+    !window.confirm(
+      "Are you sure you want to save these viewer changes?"
+    )
+  ) {
+    return;
+  }
+
+  setSaving(true);
+  setNotice("");
+
+  try {
+    if (notesChanged) {
+      await updateAdminViewer(viewer.id, {
+        notes: notes.trim() || null,
+      });
+    }
+
+    if (statusChanged) {
+      await updateAdminViewerStatus(
+        viewer.id,
+        nextStatus
+      );
+    }
+
+    const response = await getAdminViewerById(viewer.id);
+
+    if (!response.success || !response.data) {
+      throw new Error("Unable to refresh viewer details.");
+    }
+
+    const updatedViewer = response.data;
+
+    setViewer((previous) => ({
+      ...previous,
+      ...updatedViewer,
+    }));
+
+    setStatus(
+      updatedViewer.status.charAt(0).toUpperCase() +
+        updatedViewer.status.slice(1).toLowerCase()
     );
-  };
+
+    setNotes(updatedViewer.notes ?? "");
+    setNotice("Viewer changes saved successfully.");
+  } catch (error) {
+    setNotice(
+      error.message ||
+        "Unable to save viewer changes. Please try again."
+    );
+  } finally {
+    setSaving(false);
+  }
+};
+
 
   return (
     <div className="space-y-8">
@@ -124,10 +301,6 @@ function ViewerDetails() {
             <p className="mt-2 text-sm text-slate-500">
               {viewer.id} • {viewer.location}
             </p>
-
-            <p className="mt-2 text-xs font-semibold text-amber-700">
-              Demo profile — not a real registered viewer
-            </p>
           </div>
         </div>
       </section>
@@ -150,9 +323,9 @@ function ViewerDetails() {
             value: viewer.totalAssignments,
           },
           {
-            label: "Completed Viewings",
-            value: viewer.completedViewings,
-          },
+  label: "Completed Viewings",
+  value: "—",
+},
           {
             label: "Coverage Areas",
             value: viewer.coverageAreas.length,
@@ -289,10 +462,10 @@ function ViewerDetails() {
                       >
                         <td className="px-5 py-4">
                           <Link
-                            to={`/admin/bookings/${assignment.id}`}
+                            to={`/admin/bookings/${assignment.bookingId}`}
                             className="font-semibold text-[#2A9D8F] hover:underline"
                           >
-                            {assignment.id}
+                            {assignment.reference}
                           </Link>
                         </td>
 
@@ -320,7 +493,7 @@ function ViewerDetails() {
               </div>
             ) : (
               <p className="p-6 text-sm text-slate-500">
-                No assignment history in the demo dataset.
+                No assignments have been recorded for this viewer yet.
               </p>
             )}
           </section>
@@ -341,10 +514,6 @@ function ViewerDetails() {
               placeholder="Add internal notes about this viewer..."
               className="w-full rounded-xl border border-slate-200 p-4 text-sm outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100"
             />
-
-            <p className="mt-3 text-xs text-slate-500">
-              Demo only. Do not enter real confidential information.
-            </p>
           </section>
         </div>
 
@@ -376,20 +545,16 @@ function ViewerDetails() {
               <option value="Suspended">Suspended</option>
             </select>
 
-            <p className="mt-4 text-xs leading-6 text-slate-500">
-              In production, account status changes
-              will require backend validation and
-              should not erase assignment history.
-            </p>
+            
+<button
+  type="button"
+  onClick={handleValidate}
+  disabled={saving}
+  className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+>
+  {saving ? "Saving Changes..." : "Save Changes"}
+</button>
 
-            <button
-              type="button"
-              onClick={handleValidate}
-              className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-5 py-3 text-sm font-semibold text-white hover:bg-[#238579]"
-            >
-              <Save size={18} />
-              Validate Changes
-            </button>
           </section>
 
           <div className="rounded-2xl bg-[#17324D] p-6 text-white">
