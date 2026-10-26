@@ -1,6 +1,6 @@
 
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
   ArrowLeft,
@@ -8,29 +8,68 @@ import {
   Mail,
   Phone,
   MessageSquare,
-  ClipboardList,
   Send,
   Save,
   AlertCircle,
   CalendarDays,
+  ClipboardList,
+  Loader2,
+  Trash2,
+  RefreshCw,
+  CheckCircle2,
 } from "lucide-react";
 
 import StatusBadge from "../../components/admin/StatusBadge";
 
 import {
-  customerEnquiries,
-  enquiryStatuses,
-} from "../../data/adminMockData";
+  getAdminEnquiryById,
+  updateAdminEnquiryStatus,
+  deleteAdminEnquiry,
+} from "../../services/adminEnquiryApi.js";
+
+const STATUS_OPTIONS = [
+  { value: "NEW", label: "New" },
+  { value: "IN_PROGRESS", label: "In Progress" },
+  { value: "RESOLVED", label: "Resolved" },
+  { value: "CLOSED", label: "Closed" },
+];
+
+const ENQUIRY_TYPES = {
+  general: "General Enquiry",
+  booking: "New Booking Enquiry",
+  "existing-booking": "Existing Booking",
+  "property-agent": "Property Agent / Landlord",
+  viewer: "Become a Viewer",
+  partnership: "Business Partnership",
+  complaint: "Feedback or Complaint",
+  other: "Other",
+};
 
 const formatDate = (value) => {
   if (!value) return "Not recorded";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Not recorded";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/London",
+  }).format(date);
+};
+
+const getStatusLabel = (status) => {
+  return (
+    STATUS_OPTIONS.find((item) => item.value === status)?.label ||
+    status ||
+    "Unknown"
+  );
 };
 
 function InfoRow({ label, value }) {
@@ -49,38 +88,166 @@ function InfoRow({ label, value }) {
 
 function EnquiryDetails() {
   const { id } = useParams();
+  const navigate = useNavigate();
 
-  const enquiry = customerEnquiries.find(
-    (item) => item.id === id
-  );
+  const [enquiry, setEnquiry] = useState(null);
+  const [status, setStatus] = useState("NEW");
 
-  const [status, setStatus] = useState(
-    enquiry?.status || "New"
-  );
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  const [assignedTo, setAssignedTo] = useState(
-    enquiry?.assignedTo || ""
-  );
-
-  const [internalNotes, setInternalNotes] = useState(
-    enquiry?.internalNotes || ""
-  );
-
-  const [responseNotes, setResponseNotes] = useState(
-    enquiry?.responseNotes || ""
-  );
-
+  const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    if (!enquiry) return;
+    let active = true;
 
-    setStatus(enquiry.status);
-    setAssignedTo(enquiry.assignedTo || "");
-    setInternalNotes(enquiry.internalNotes || "");
-    setResponseNotes(enquiry.responseNotes || "");
-    setNotice("");
-  }, [id]);
+    async function fetchEnquiry() {
+      try {
+        setLoading(true);
+        setError("");
+        setNotice("");
+        setEnquiry(null);
+
+        const response = await getAdminEnquiryById(id);
+
+        if (!active) return;
+
+        if (!response?.success || !response?.data?.enquiry) {
+          throw new Error(
+            response?.message || "Enquiry not found."
+          );
+        }
+
+        const record = response.data.enquiry;
+
+        setEnquiry(record);
+        setStatus(record.status || "NEW");
+      } catch (err) {
+        if (!active) return;
+
+        setError(
+          err?.message ||
+            "Unable to load enquiry details."
+        );
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchEnquiry();
+
+    return () => {
+      active = false;
+    };
+  }, [id, reloadKey]);
+
+  const refreshEnquiry = () => {
+    setReloadKey((previous) => previous + 1);
+  };
+
+  const handleSaveStatus = async () => {
+    if (!enquiry || saving) return;
+
+    if (status === enquiry.status) {
+      setNotice("No status changes to save.");
+      setError("");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      setError("");
+      setNotice("");
+
+      const response = await updateAdminEnquiryStatus(
+        enquiry.id,
+        status
+      );
+
+      if (!response?.success) {
+        throw new Error(
+          response?.message ||
+            "Unable to update enquiry status."
+        );
+      }
+
+      // Use the returned record when available.
+      // Otherwise update the status locally.
+      const updatedEnquiry = response?.data?.enquiry;
+
+      setEnquiry((previous) => ({
+        ...previous,
+        ...(updatedEnquiry || {}),
+        status: updatedEnquiry?.status || status,
+      }));
+
+      setStatus(updatedEnquiry?.status || status);
+
+      setNotice("Enquiry status updated successfully.");
+    } catch (err) {
+      setError(
+        err?.message ||
+          "Unable to save enquiry status."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!enquiry || deleting) return;
+
+    const confirmed = window.confirm(
+      "Are you sure you want to permanently delete this enquiry? This action cannot be undone."
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeleting(true);
+      setError("");
+      setNotice("");
+
+      const response = await deleteAdminEnquiry(enquiry.id);
+
+      if (!response?.success) {
+        throw new Error(
+          response?.message ||
+            "Unable to delete enquiry."
+        );
+      }
+
+      navigate("/admin/enquiries", {
+        replace: true,
+      });
+    } catch (err) {
+      setError(
+        err?.message ||
+          "Unable to delete enquiry."
+      );
+      setDeleting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[420px] flex-col items-center justify-center gap-4 rounded-2xl border border-slate-200 bg-white p-8">
+        <Loader2
+          size={36}
+          className="animate-spin text-[#2A9D8F]"
+        />
+
+        <p className="text-sm text-slate-600">
+          Loading enquiry details...
+        </p>
+      </div>
+    );
+  }
 
   if (!enquiry) {
     return (
@@ -91,29 +258,45 @@ function EnquiryDetails() {
         />
 
         <h1 className="mt-5 text-2xl font-bold text-[#17324D]">
-          Enquiry Not Found
+          Enquiry Not Available
         </h1>
 
-        <Link
-          to="/admin/enquiries"
-          className="mt-6 inline-flex items-center gap-2 font-semibold text-[#2A9D8F]"
-        >
-          <ArrowLeft size={17} />
-          Back to Enquiries
-        </Link>
+        <p className="mx-auto mt-3 max-w-md text-sm leading-7 text-slate-600">
+          {error ||
+            "This enquiry could not be found or is no longer available."}
+        </p>
+
+        <div className="mt-7 flex flex-wrap justify-center gap-3">
+          <button
+            type="button"
+            onClick={refreshEnquiry}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-[#17324D]"
+          >
+            <RefreshCw size={17} />
+            Retry
+          </button>
+
+          <Link
+            to="/admin/enquiries"
+            className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-5 py-3 text-sm font-semibold text-white"
+          >
+            <ArrowLeft size={17} />
+            Back to Enquiries
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const replySubject = `Re: ${enquiry.subject}`;
+  const replySubject = `Re: ${enquiry.subject || "Your enquiry"}`;
 
-  const replyBody = `Hello ${enquiry.name},
+  const replyBody = `Hello ${enquiry.fullName},
 
 Thank you for contacting ViewForMe.
 
 Regarding your enquiry:
 
-"${enquiry.subject}"
+"${enquiry.subject || "General enquiry"}"
 
 [Write your response here]
 
@@ -125,24 +308,11 @@ ViewForMe Support Team`;
     `?subject=${encodeURIComponent(replySubject)}` +
     `&body=${encodeURIComponent(replyBody)}`;
 
-  const handleValidate = () => {
-    if (
-      ["Responded", "Resolved"].includes(status) &&
-      !responseNotes.trim()
-    ) {
-      setNotice(
-        "Please record the response or resolution details before validating this status."
-      );
-      return;
-    }
-
-    setNotice(
-      `Demo validation completed for status: ${status}. Changes are temporary. No database update or customer notification has occurred.`
-    );
-  };
+  const hasStatusChanged = status !== enquiry.status;
 
   return (
     <div className="space-y-8">
+      {/* BACK LINK */}
       <Link
         to="/admin/enquiries"
         className="inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-[#2A9D8F]"
@@ -155,44 +325,75 @@ ViewForMe Support Team`;
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-extrabold text-[#17324D] sm:text-3xl">
-              Enquiry {enquiry.id}
+            <h1 className="break-all text-2xl font-extrabold text-[#17324D] sm:text-3xl">
+              Enquiry Details
             </h1>
 
-            <StatusBadge status={status} />
+            <StatusBadge
+              status={getStatusLabel(enquiry.status)}
+            />
           </div>
 
           <p className="mt-2 text-sm text-slate-600">
-            {enquiry.subject}
+            {enquiry.subject || "No subject"}
           </p>
 
-          <p className="mt-2 text-xs font-semibold text-amber-700">
-            Demo enquiry — changes are not persisted
+          <p className="mt-2 break-all text-xs text-slate-400">
+            Reference: {enquiry.id}
           </p>
         </div>
 
-        <a
-          href={mailtoLink}
-          className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-3 text-sm font-semibold text-white hover:bg-[#238579]"
-        >
-          <Send size={18} />
-          Reply by Email
-        </a>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={refreshEnquiry}
+            disabled={saving || deleting}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-[#17324D] hover:bg-slate-50 disabled:opacity-50"
+          >
+            <RefreshCw size={17} />
+            Refresh
+          </button>
+
+          <a
+            href={mailtoLink}
+            className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-3 text-sm font-semibold text-white hover:bg-[#238579]"
+          >
+            <Send size={18} />
+            Reply by Email
+          </a>
+        </div>
       </div>
 
-      {/* NOTICE */}
+      {/* SUCCESS NOTICE */}
       {notice && (
         <div
           role="status"
-          className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4"
+          className="flex items-start gap-3 rounded-xl border border-teal-200 bg-teal-50 p-4"
+        >
+          <CheckCircle2
+            size={20}
+            className="mt-0.5 shrink-0 text-[#2A9D8F]"
+          />
+
+          <p className="text-sm leading-7 text-teal-800">
+            {notice}
+          </p>
+        </div>
+      )}
+
+      {/* ERROR NOTICE */}
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4"
         >
           <AlertCircle
             size={20}
-            className="mt-0.5 shrink-0 text-blue-700"
+            className="mt-0.5 shrink-0 text-red-600"
           />
 
-          <p className="text-sm leading-7 text-blue-800">
-            {notice}
+          <p className="text-sm leading-7 text-red-800">
+            {error}
           </p>
         </div>
       )}
@@ -200,7 +401,7 @@ ViewForMe Support Team`;
       <div className="grid gap-6 xl:grid-cols-3">
         {/* MAIN CONTENT */}
         <div className="space-y-6 xl:col-span-2">
-          {/* CUSTOMER */}
+          {/* CUSTOMER INFORMATION */}
           <section className="rounded-2xl border border-slate-200 bg-white p-6">
             <div className="mb-5 flex items-center gap-3">
               <UserRound
@@ -215,30 +416,38 @@ ViewForMe Support Team`;
 
             <InfoRow
               label="Name"
-              value={enquiry.name}
+              value={enquiry.fullName}
             />
 
             <InfoRow
               label="Email"
               value={
-                <a
-                  href={`mailto:${enquiry.email}`}
-                  className="text-[#2A9D8F] hover:underline"
-                >
-                  {enquiry.email}
-                </a>
+                enquiry.email ? (
+                  <a
+                    href={`mailto:${enquiry.email}`}
+                    className="text-[#2A9D8F] hover:underline"
+                  >
+                    {enquiry.email}
+                  </a>
+                ) : (
+                  "Not provided"
+                )
               }
             />
 
             <InfoRow
               label="Phone"
               value={
-                <a
-                  href={`tel:${enquiry.phone}`}
-                  className="text-[#2A9D8F] hover:underline"
-                >
-                  {enquiry.phone}
-                </a>
+                enquiry.phone ? (
+                  <a
+                    href={`tel:${enquiry.phone}`}
+                    className="text-[#2A9D8F] hover:underline"
+                  >
+                    {enquiry.phone}
+                  </a>
+                ) : (
+                  "Not provided"
+                )
               }
             />
           </section>
@@ -256,16 +465,26 @@ ViewForMe Support Team`;
               </h2>
             </div>
 
-            <p className="text-sm font-semibold text-[#17324D]">
-              {enquiry.subject}
-            </p>
+            <InfoRow
+              label="Enquiry Type"
+              value={
+                ENQUIRY_TYPES[enquiry.enquiryType] ||
+                enquiry.enquiryType ||
+                "Not specified"
+              }
+            />
 
-            <div className="mt-4 whitespace-pre-wrap rounded-xl bg-[#F6F9FA] p-5 text-sm leading-8 text-slate-600">
+            <InfoRow
+              label="Subject"
+              value={enquiry.subject || "No subject"}
+            />
+
+            <div className="mt-5 whitespace-pre-wrap break-words rounded-xl bg-[#F6F9FA] p-5 text-sm leading-8 text-slate-600">
               {enquiry.message}
             </div>
           </section>
 
-          {/* RESPONSE NOTES */}
+          {/* RESPONSE TRACKING */}
           <section className="rounded-2xl border border-slate-200 bg-white p-6">
             <div className="mb-5 flex items-center gap-3">
               <Mail
@@ -274,36 +493,33 @@ ViewForMe Support Team`;
               />
 
               <h2 className="text-lg font-bold text-[#17324D]">
-                Response Tracking
+                Customer Response
               </h2>
             </div>
 
-            <label
-              htmlFor="response-notes"
-              className="mb-2 block text-sm font-semibold text-[#17324D]"
+            <p className="text-sm leading-7 text-slate-600">
+              You can respond directly to this customer
+              using your email application. The reply
+              will include the enquiry subject and a
+              prepared message template.
+            </p>
+
+            <a
+              href={mailtoLink}
+              className="mt-5 inline-flex items-center gap-2 rounded-xl border border-[#2A9D8F] px-5 py-3 text-sm font-semibold text-[#2A9D8F] hover:bg-[#E8F6F3]"
             >
-              Response or Resolution Notes
-            </label>
+              <Send size={17} />
+              Compose Email Response
+            </a>
 
-            <textarea
-              id="response-notes"
-              rows={6}
-              value={responseNotes}
-              onChange={(event) => {
-                setResponseNotes(event.target.value);
-                setNotice("");
-              }}
-              placeholder="Record what was communicated to the customer..."
-              className="w-full rounded-xl border border-slate-200 p-4 text-sm leading-7 outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100"
-            />
-
-            <p className="mt-3 text-xs leading-6 text-slate-500">
-              This field records response information.
-              It does not send an email or message.
+            <p className="mt-4 text-xs leading-6 text-slate-500">
+              Opening your email application does not
+              automatically send a message or record
+              a response in the ViewForMe database.
             </p>
           </section>
 
-          {/* INTERNAL NOTES */}
+          {/* ADMINISTRATION NOTES */}
           <section className="rounded-2xl border border-slate-200 bg-white p-6">
             <div className="mb-5 flex items-center gap-3">
               <ClipboardList
@@ -312,23 +528,15 @@ ViewForMe Support Team`;
               />
 
               <h2 className="text-lg font-bold text-[#17324D]">
-                Internal Administration Notes
+                Administration Notes
               </h2>
             </div>
 
-            <textarea
-              rows={5}
-              value={internalNotes}
-              onChange={(event) => {
-                setInternalNotes(event.target.value);
-                setNotice("");
-              }}
-              placeholder="Add follow-up tasks or internal notes..."
-              className="w-full rounded-xl border border-slate-200 p-4 text-sm outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100"
-            />
-
-            <p className="mt-3 text-xs text-slate-500">
-              Internal notes are not customer-facing.
+            <p className="text-sm leading-7 text-slate-600">
+              Administrator assignment, internal notes,
+              and response tracking will become available
+              when their database fields and API endpoints
+              are implemented.
             </p>
           </section>
         </div>
@@ -354,43 +562,55 @@ ViewForMe Support Team`;
               onChange={(event) => {
                 setStatus(event.target.value);
                 setNotice("");
+                setError("");
               }}
-              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-[#2A9D8F]"
+              disabled={saving || deleting}
+              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-[#2A9D8F] disabled:opacity-60"
             >
-              {enquiryStatuses.map((item) => (
-                <option key={item} value={item}>
-                  {item}
+              {STATUS_OPTIONS.map((item) => (
+                <option
+                  key={item.value}
+                  value={item.value}
+                >
+                  {item.label}
                 </option>
               ))}
             </select>
 
-            <label
-              htmlFor="assigned-admin"
-              className="mb-2 mt-5 block text-sm font-semibold text-[#17324D]"
-            >
-              Assigned Administrator
-            </label>
-
-            <input
-              id="assigned-admin"
-              type="text"
-              value={assignedTo}
-              onChange={(event) => {
-                setAssignedTo(event.target.value);
-                setNotice("");
-              }}
-              placeholder="Enter administrator name"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-[#2A9D8F]"
-            />
+            {hasStatusChanged && (
+              <p className="mt-3 text-xs text-amber-700">
+                You have an unsaved status change.
+              </p>
+            )}
 
             <button
               type="button"
-              onClick={handleValidate}
-              className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-5 py-3 text-sm font-semibold text-white hover:bg-[#238579]"
+              onClick={handleSaveStatus}
+              disabled={
+                saving ||
+                deleting ||
+                !hasStatusChanged
+              }
+              className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-5 py-3 text-sm font-semibold text-white hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Save size={18} />
-              Validate Changes
+              {saving ? (
+                <Loader2
+                  size={18}
+                  className="animate-spin"
+                />
+              ) : (
+                <Save size={18} />
+              )}
+
+              {saving
+                ? "Saving Changes..."
+                : "Save Status"}
             </button>
+
+            <p className="mt-3 text-xs leading-6 text-slate-500">
+              Status updates are saved directly to
+              the ViewForMe database.
+            </p>
           </section>
 
           {/* TIMELINE */}
@@ -412,14 +632,46 @@ ViewForMe Support Team`;
             />
 
             <InfoRow
-              label="Responded"
-              value={formatDate(enquiry.respondedAt)}
+              label="Last Updated"
+              value={formatDate(enquiry.updatedAt)}
             />
 
             <InfoRow
-              label="Resolved"
-              value={formatDate(enquiry.resolvedAt)}
+              label="Current Status"
+              value={getStatusLabel(enquiry.status)}
             />
+          </section>
+
+          {/* DELETE */}
+          <section className="rounded-2xl border border-red-200 bg-white p-6">
+            <h2 className="text-lg font-bold text-red-700">
+              Delete Enquiry
+            </h2>
+
+            <p className="mt-3 text-sm leading-7 text-slate-600">
+              Permanently remove this enquiry from
+              ViewForMe. This action cannot be undone.
+            </p>
+
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting || saving}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl border border-red-300 px-5 py-3 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {deleting ? (
+                <Loader2
+                  size={18}
+                  className="animate-spin"
+                />
+              ) : (
+                <Trash2 size={18} />
+              )}
+
+              {deleting
+                ? "Deleting Enquiry..."
+                : "Delete Enquiry"}
+            </button>
           </section>
 
           {/* REMINDER */}

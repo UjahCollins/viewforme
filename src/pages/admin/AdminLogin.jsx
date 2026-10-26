@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { loginAdmin } from "../../services/adminAuthApi.js";
+import { useAdminAuth } from "../../context/AdminAuthContext.jsx";
 import {
   Eye,
   EyeOff,
@@ -32,6 +33,7 @@ function AdminLogin() {
   const [resetEmail, setResetEmail] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const { signIn } = useAdminAuth();
 const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleChange = (event) => {
@@ -46,6 +48,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   };
 
  
+
 const handleLogin = async (event) => {
   event.preventDefault();
   setError("");
@@ -76,22 +79,40 @@ const handleLogin = async (event) => {
       password,
     });
 
-    if (!response.success) {
+    const result =
+      response?.data?.success !== undefined
+        ? response.data
+        : response;
+
+    if (!result?.success) {
       throw new Error(
-        response.message || "Unable to sign in."
+        result?.message || "Unable to sign in."
       );
     }
 
-    navigate("/admin", { replace: true });
+    // Verify the session and update shared auth state.
+    const currentAdmin = await signIn();
+
+    if (!currentAdmin) {
+      throw new Error(
+        "Login succeeded, but the administrator session could not be verified."
+      );
+    }
+
+    navigate("/admin/dashboard", {
+      replace: true,
+    });
   } catch (error) {
     setError(
-      error.message ||
+      error?.response?.data?.message ||
+        error?.message ||
         "Login failed. Please check your credentials."
     );
   } finally {
     setIsSubmitting(false);
   }
 };
+
 
 
   const handlePasswordReset = (event) => {

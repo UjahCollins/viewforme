@@ -14,8 +14,13 @@ import {
   UserRound,
   Info,
   Clock3,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
 
+import { submitEnquiry } from "../services/enquiryApi.js";
+
+// INITIAL FORM STATE
 const initialForm = {
   firstName: "",
   lastName: "",
@@ -27,9 +32,11 @@ const initialForm = {
   consent: false,
 };
 
+// INPUT STYLING
 const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm text-[#17324D] outline-none transition placeholder:text-slate-400 focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100";
 
+// CONTACT METHODS
 const contactMethods = [
   {
     icon: Mail,
@@ -57,6 +64,7 @@ const contactMethods = [
   },
 ];
 
+// ENQUIRY TYPES
 const enquiryOptions = [
   { value: "general", label: "General Enquiry" },
   { value: "booking", label: "New Booking Enquiry" },
@@ -71,7 +79,10 @@ const enquiryOptions = [
 function Contact() {
   const [formData, setFormData] = useState(initialForm);
   const [formError, setFormError] = useState("");
+  const [formSuccess, setFormSuccess] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // HANDLE INPUT CHANGES
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target;
 
@@ -81,11 +92,17 @@ function Contact() {
     }));
 
     setFormError("");
+    setFormSuccess("");
   };
 
-  const handleSubmit = (event) => {
+  // HANDLE FORM SUBMISSION
+  const handleSubmit = async (event) => {
     event.preventDefault();
+
+    if (isSubmitting) return;
+
     setFormError("");
+    setFormSuccess("");
 
     const requiredFields = [
       "firstName",
@@ -97,7 +114,7 @@ function Contact() {
     ];
 
     const hasMissingField = requiredFields.some(
-      (field) => !formData[field].trim()
+      (field) => !String(formData[field] || "").trim()
     );
 
     if (hasMissingField) {
@@ -106,7 +123,9 @@ function Contact() {
     }
 
     if (
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+        formData.email.trim()
+      )
     ) {
       setFormError("Please enter a valid email address.");
       return;
@@ -114,9 +133,18 @@ function Contact() {
 
     if (
       formData.phone.trim() &&
-      !/^\+?[0-9()\s-]{7,25}$/.test(formData.phone.trim())
+      !/^\+?[0-9()\s-]{7,25}$/.test(
+        formData.phone.trim()
+      )
     ) {
       setFormError("Please enter a valid phone number.");
+      return;
+    }
+
+    if (formData.message.trim().length < 10) {
+      setFormError(
+        "Your message must contain at least 10 characters."
+      );
       return;
     }
 
@@ -127,13 +155,43 @@ function Contact() {
       return;
     }
 
-    // API submission will be implemented later.
-    // Do not claim that the message has been delivered
-    // until the backend confirms successful submission.
+    try {
+      setIsSubmitting(true);
 
-    setFormError(
-      "Online message submission is not available yet. Please contact ViewForMe using the email address or phone number above."
-    );
+      const response = await submitEnquiry({
+        firstName: formData.firstName.trim(),
+        lastName: formData.lastName.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim(),
+        enquiryType: formData.enquiryType,
+        subject: formData.subject.trim(),
+        message: formData.message.trim(),
+        consent: formData.consent,
+      });
+
+      if (response?.success !== true) {
+        throw new Error(
+          response?.message ||
+            "Unable to submit your enquiry."
+        );
+      }
+
+      setFormSuccess(
+        response.message ||
+          "Your enquiry has been submitted successfully. Our team will get back to you."
+      );
+
+      setFormData({ ...initialForm });
+    } catch (error) {
+      console.error("ENQUIRY SUBMISSION ERROR:", error);
+
+      setFormError(
+        error?.message ||
+          "Something went wrong. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -336,8 +394,8 @@ function Contact() {
             </div>
 
             <p className="mt-3 text-sm leading-7 text-slate-600">
-              Complete the fields below to prepare
-              your enquiry.
+              Complete the fields below to send your
+              enquiry directly to our team.
             </p>
 
             <div className="mt-8 grid gap-6 sm:grid-cols-2">
@@ -536,7 +594,7 @@ function Contact() {
               </label>
             </div>
 
-            {/* ERROR */}
+            {/* ERROR MESSAGE */}
             {formError && (
               <div
                 role="alert"
@@ -553,18 +611,46 @@ function Contact() {
               </div>
             )}
 
-            {/* SUBMIT */}
+            {/* SUCCESS MESSAGE */}
+            {formSuccess && (
+              <div
+                role="status"
+                className="mt-6 flex items-start gap-3 rounded-xl border border-teal-200 bg-teal-50 p-4"
+              >
+                <CheckCircle2
+                  size={21}
+                  className="mt-0.5 shrink-0 text-[#2A9D8F]"
+                />
+
+                <p className="text-sm font-medium leading-6 text-teal-800">
+                  {formSuccess}
+                </p>
+              </div>
+            )}
+
+            {/* SUBMIT BUTTON */}
             <button
               type="submit"
-              className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-4 font-semibold text-white transition hover:bg-[#238579]"
+              disabled={isSubmitting}
+              className="mt-8 flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-4 font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <Send size={19} />
-              Send Message
+              {isSubmitting ? (
+                <Loader2
+                  size={19}
+                  className="animate-spin"
+                />
+              ) : (
+                <Send size={19} />
+              )}
+
+              {isSubmitting
+                ? "Sending Message..."
+                : "Send Message"}
             </button>
 
             <p className="mt-4 text-center text-xs leading-6 text-slate-500">
-              Online submissions will be enabled
-              when the contact API is connected.
+              Your enquiry will be sent securely to our
+              team for review.
             </p>
           </form>
         </div>

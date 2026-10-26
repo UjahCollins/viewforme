@@ -1,4 +1,5 @@
 
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
@@ -11,24 +12,40 @@ import {
 } from "lucide-react";
 
 import StatusBadge from "../../components/admin/StatusBadge";
+import { getAdminPaymentById, reconcileAdminPayment, } from "../../services/adminPaymentService";
 
-import { paymentTransactions } from "../../data/adminMockData";
+const statusMap = {
+  PENDING: "Pending",
+  SUCCEEDED: "Paid",
+  FAILED: "Failed",
+  REFUNDED: "Refunded",
+  PARTIALLY_REFUNDED: "Partially Refunded",
+};
 
 const formatCurrency = (amount, currency = "GBP") =>
   new Intl.NumberFormat("en-GB", {
     style: "currency",
     currency,
-  }).format(amount);
+  }).format(Number(amount ?? 0));
 
 const formatDate = (value) => {
   if (!value) return "Not recorded";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid date";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/London",
+    timeZoneName: "short",
+  }).format(date);
 };
 
 function InfoRow({ label, value }) {
@@ -39,7 +56,7 @@ function InfoRow({ label, value }) {
       </span>
 
       <span className="break-all text-sm font-semibold text-[#17324D] sm:text-right">
-        {value || "Not available"}
+        {value ?? "Not available"}
       </span>
     </div>
   );
@@ -48,11 +65,102 @@ function InfoRow({ label, value }) {
 function PaymentDetails() {
   const { id } = useParams();
 
-  const payment = paymentTransactions.find(
-    (item) => item.id === id
-  );
+  const [payment, setPayment] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reconciling, setReconciling] = useState(false);
+const [reconcileError, setReconcileError] = useState("");
+const [reconcileMessage, setReconcileMessage] = useState("");
 
-  if (!payment) {
+  useEffect(() => {
+    let active = true;
+
+    async function loadPayment() {
+      try {
+        setLoading(true);
+        setError("");
+        setPayment(null);
+
+        const response = await getAdminPaymentById(id);
+
+        if (!active) return;
+
+        setPayment(response.data);
+      } catch (err) {
+        if (!active) return;
+
+        console.error("Failed to load payment:", err);
+
+        setError(
+          err.message || "Unable to load payment details."
+        );
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    if (id) {
+      loadPayment();
+    } else {
+      setLoading(false);
+      setError("Payment ID is missing.");
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [id]);
+
+  
+async function handleReconcile() {
+  if (!payment?.stripeCheckoutSessionId || reconciling) {
+    return;
+  }
+
+  try {
+    setReconciling(true);
+    setReconcileError("");
+    setReconcileMessage("");
+
+    await reconcileAdminPayment(payment.id);
+
+    const refreshed = await getAdminPaymentById(payment.id);
+
+    setPayment(refreshed.data);
+
+    setReconcileMessage(
+      "Payment status refreshed from Stripe successfully."
+    );
+  } catch (err) {
+    console.error("Payment reconciliation failed:", err);
+
+    setReconcileError(
+      err.message || "Unable to reconcile this payment."
+    );
+  } finally {
+    setReconciling(false);
+  }
+}
+
+
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center">
+        <RefreshCw
+          size={32}
+          className="mx-auto animate-spin text-[#2A9D8F]"
+        />
+
+        <p className="mt-4 text-sm text-slate-600">
+          Loading payment details...
+        </p>
+      </div>
+    );
+  }
+
+  if (error || !payment) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center">
         <AlertCircle
@@ -61,8 +169,12 @@ function PaymentDetails() {
         />
 
         <h1 className="mt-5 text-2xl font-bold text-[#17324D]">
-          Transaction Not Found
+          {error ? "Unable to Load Transaction" : "Transaction Not Found"}
         </h1>
+
+        <p className="mt-3 text-sm text-slate-500">
+          {error || "The requested transaction could not be found."}
+        </p>
 
         <Link
           to="/admin/payments"
@@ -75,12 +187,24 @@ function PaymentDetails() {
     );
   }
 
-  const netAmount =
-    ["Paid", "Refunded", "Partially Refunded"].includes(
-      payment.status
-    )
-      ? payment.amount - payment.refundedAmount
-      : 0;
+  const status = statusMap[payment.status] ?? payment.status;
+
+  const amount = Number(payment.amount ?? 0);
+  const refundedAmount = Number(payment.refundedAmount ?? 0);
+
+  const isSuccessful = [
+    "SUCCEEDED",
+    "REFUNDED",
+    "PARTIALLY_REFUNDED",
+  ].includes(payment.status);
+
+  const netAmount = isSuccessful
+    ? Math.max(0, amount - refundedAmount)
+    : 0;
+
+  const booking = payment.booking;
+  const customer = booking?.customer;
+  const service = booking?.service;
 
   return (
     <div className="space-y-8">
@@ -95,20 +219,16 @@ function PaymentDetails() {
       {/* HEADER */}
       <div>
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-extrabold text-[#17324D] sm:text-3xl">
+          <h1 className="break-all text-2xl font-extrabold text-[#17324D] sm:text-3xl">
             Transaction {payment.id}
           </h1>
 
-          <StatusBadge status={payment.status} />
+          <StatusBadge status={status} />
         </div>
 
         <p className="mt-2 text-sm text-slate-600">
           Payment information for booking{" "}
-          {payment.bookingId}
-        </p>
-
-        <p className="mt-2 text-xs font-semibold text-amber-700">
-          Demo transaction — not verified by Stripe
+          {booking?.reference ?? "Not available"}
         </p>
       </div>
 
@@ -117,15 +237,12 @@ function PaymentDetails() {
         {[
           {
             label: "Transaction Amount",
-            value: formatCurrency(
-              payment.amount,
-              payment.currency
-            ),
+            value: formatCurrency(amount, payment.currency),
           },
           {
             label: "Refunded Amount",
             value: formatCurrency(
-              payment.refundedAmount,
+              refundedAmount,
               payment.currency
             ),
           },
@@ -157,10 +274,7 @@ function PaymentDetails() {
           {/* TRANSACTION DETAILS */}
           <section className="rounded-2xl border border-slate-200 bg-white p-6">
             <div className="mb-5 flex items-center gap-3">
-              <Receipt
-                size={22}
-                className="text-[#2A9D8F]"
-              />
+              <Receipt size={22} className="text-[#2A9D8F]" />
 
               <h2 className="text-lg font-bold text-[#17324D]">
                 Transaction Information
@@ -173,31 +287,50 @@ function PaymentDetails() {
             />
 
             <InfoRow
-              label="Booking ID"
+              label="Booking Reference"
               value={
-                <Link
-                  to={`/admin/bookings/${payment.bookingId}`}
-                  className="text-[#2A9D8F] hover:underline"
-                >
-                  {payment.bookingId}
-                </Link>
+                booking?.id ? (
+                  <Link
+                    to={`/admin/bookings/${booking.id}`}
+                    className="text-[#2A9D8F] hover:underline"
+                  >
+                    {booking.reference}
+                  </Link>
+                ) : (
+                  "Not available"
+                )
               }
             />
 
             <InfoRow
+              label="Booking Status"
+              value={booking?.status}
+            />
+
+            <InfoRow
+              label="Service"
+              value={service?.name}
+            />
+
+            <InfoRow
               label="Customer"
-              value={payment.customer}
+              value={customer?.fullName}
             />
 
             <InfoRow
               label="Email"
-              value={payment.email}
+              value={customer?.email}
+            />
+
+            <InfoRow
+              label="Phone"
+              value={customer?.phone}
             />
 
             <InfoRow
               label="Amount"
               value={formatCurrency(
-                payment.amount,
+                amount,
                 payment.currency
               )}
             />
@@ -208,13 +341,13 @@ function PaymentDetails() {
             />
 
             <InfoRow
-              label="Payment Method"
-              value={payment.method}
+              label="Payment Provider"
+              value="Stripe"
             />
 
             <InfoRow
-              label="Provider"
-              value={payment.provider}
+              label="Payment Method"
+              value="Not recorded"
             />
 
             <InfoRow
@@ -231,10 +364,7 @@ function PaymentDetails() {
           {/* STRIPE REFERENCES */}
           <section className="rounded-2xl border border-slate-200 bg-white p-6">
             <div className="mb-5 flex items-center gap-3">
-              <CreditCard
-                size={22}
-                className="text-[#2A9D8F]"
-              />
+              <CreditCard size={22} className="text-[#2A9D8F]" />
 
               <h2 className="text-lg font-bold text-[#17324D]">
                 Payment Provider References
@@ -243,7 +373,7 @@ function PaymentDetails() {
 
             <InfoRow
               label="Checkout Session"
-              value={payment.stripeSessionId}
+              value={payment.stripeCheckoutSessionId}
             />
 
             <InfoRow
@@ -252,19 +382,17 @@ function PaymentDetails() {
             />
 
             <p className="mt-5 text-xs leading-6 text-slate-500">
-              These are fictional Stripe references.
-              Production references will be generated
-              and verified through the backend.
+              These references were recorded by the backend
+              during the Stripe Checkout payment process.
+              Payment status is maintained through trusted
+              Stripe verification and reconciliation.
             </p>
           </section>
 
           {/* REFUND DETAILS */}
           <section className="rounded-2xl border border-slate-200 bg-white p-6">
             <div className="mb-5 flex items-center gap-3">
-              <RefreshCw
-                size={22}
-                className="text-[#2A9D8F]"
-              />
+              <RefreshCw size={22} className="text-[#2A9D8F]" />
 
               <h2 className="text-lg font-bold text-[#17324D]">
                 Refund Information
@@ -274,7 +402,7 @@ function PaymentDetails() {
             <InfoRow
               label="Refunded Amount"
               value={formatCurrency(
-                payment.refundedAmount,
+                refundedAmount,
                 payment.currency
               )}
             />
@@ -285,23 +413,22 @@ function PaymentDetails() {
             />
 
             <p className="mt-5 text-sm leading-7 text-slate-500">
-              Refund requests will be managed
-              through a secure backend workflow.
-              No refund action is available
-              in this frontend demonstration.
+              Refunds must be processed through Stripe
+              and verified by the backend before the
+              payment record is updated.
             </p>
           </section>
 
           {/* FAILURE INFORMATION */}
-          {payment.status === "Failed" && (
+          {payment.status === "FAILED" && (
             <section className="rounded-2xl border border-red-200 bg-red-50 p-6">
               <h2 className="text-lg font-bold text-red-800">
                 Payment Failure
               </h2>
 
               <p className="mt-3 text-sm leading-7 text-red-700">
-                {payment.failureReason ||
-                  "No failure reason recorded."}
+                No failure reason is currently recorded
+                for this transaction.
               </p>
             </section>
           )}
@@ -315,15 +442,43 @@ function PaymentDetails() {
             </h2>
 
             <div className="mt-5">
-              <StatusBadge status={payment.status} />
+              <StatusBadge status={status} />
             </div>
 
             <p className="mt-5 text-sm leading-7 text-slate-500">
-              Payment status is read-only.
-              It must be derived from trusted
-              backend payment records and
-              Stripe verification.
+              Payment status is read-only and is derived
+              from backend payment records maintained
+              through Stripe verification.
             </p>
+
+            <button
+  type="button"
+  onClick={handleReconcile}
+  disabled={
+    reconciling ||
+    !payment.stripeCheckoutSessionId
+  }
+  className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#2A9D8F] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-50"
+>
+  <RefreshCw
+    size={17}
+    className={reconciling ? "animate-spin" : ""}
+  />
+
+  {reconciling ? "Checking Stripe..." : "Refresh from Stripe"}
+</button>
+
+{reconcileMessage && (
+  <p role="status" className="mt-3 text-sm text-green-700">
+    {reconcileMessage}
+  </p>
+)}
+
+{reconcileError && (
+  <p role="alert" className="mt-3 text-sm text-red-600">
+    {reconcileError}
+  </p>
+)}
           </section>
 
           <div className="rounded-2xl bg-[#17324D] p-6 text-white">
@@ -337,11 +492,9 @@ function PaymentDetails() {
             </h3>
 
             <p className="mt-3 text-sm leading-7 text-slate-200">
-              Never confirm a booking payment
-              solely because the customer
-              reaches a success page.
-              The backend must verify the
-              payment with Stripe.
+              A successful payment must be verified
+              by the backend using Stripe before
+              the booking payment is confirmed.
             </p>
           </div>
         </div>

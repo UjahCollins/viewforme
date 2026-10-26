@@ -1,5 +1,4 @@
-
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -17,10 +16,23 @@ import {
 
 import StatusBadge from "../../components/admin/StatusBadge";
 
-import {
-  paymentTransactions,
-  paymentStatuses,
-} from "../../data/adminMockData";
+import { getAdminPayments, getAdminPaymentSummary } from "../../services/adminPaymentService";
+
+const paymentStatuses = [
+  "Pending",
+  "Paid",
+  "Failed",
+  "Refunded",
+  "Partially Refunded",
+];
+
+const statusMap = {
+  PENDING: "Pending",
+  SUCCEEDED: "Paid",
+  FAILED: "Failed",
+  REFUNDED: "Refunded",
+  PARTIALLY_REFUNDED: "Partially Refunded",
+};
 
 const formatCurrency = (amount, currency = "GBP") =>
   new Intl.NumberFormat("en-GB", {
@@ -31,12 +43,18 @@ const formatCurrency = (amount, currency = "GBP") =>
 const formatDate = (value) => {
   if (!value) return "Not available";
 
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid date";
+  }
+
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+    timeZone: "Europe/London",
+  }).format(date);
 };
 
 function SummaryCard({ title, value, icon: Icon }) {
@@ -64,75 +82,158 @@ function Payments() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [methodFilter, setMethodFilter] = useState("All");
   const [startDate, setStartDate] = useState("");
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({
+  page: 1,
+  limit: 20,
+  total: 0,
+  totalPages: 0,
+});
+
+const [debouncedSearch, setDebouncedSearch] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [paymentTransactions, setPaymentTransactions] = useState([]);
+const [loading, setLoading] = useState(true);
+const [error, setError] = useState("");
 
-  const filteredPayments = useMemo(() => {
-    const query = search.trim().toLowerCase();
+const [paymentSummary, setPaymentSummary] = useState(null);
+const [summaryLoading, setSummaryLoading] = useState(true);
+const [summaryError, setSummaryError] = useState("");
 
-    return paymentTransactions.filter((payment) => {
-      const matchesSearch =
-        !query ||
-        [
-          payment.id,
-          payment.bookingId,
-          payment.customer,
-          payment.email,
-          payment.stripePaymentIntentId,
-        ].some((value) =>
-          String(value || "").toLowerCase().includes(query)
-        );
 
-      const matchesStatus =
-        statusFilter === "All" ||
-        payment.status === statusFilter;
+useEffect(() => {
+  const timer = setTimeout(() => {
+    setDebouncedSearch(search.trim());
+  }, 400);
 
-      const matchesMethod =
-        methodFilter === "All" ||
-        payment.method === methodFilter;
+  return () => clearTimeout(timer);
+}, [search]);
 
-      const matchesStartDate =
-        !startDate || payment.createdAt >= startDate;
 
-      const matchesEndDate =
-        !endDate || payment.createdAt <= endDate;
+useEffect(() => {
+  let active = true;
 
-      return (
-        matchesSearch &&
-        matchesStatus &&
-        matchesMethod &&
-        matchesStartDate &&
-        matchesEndDate
+  async function loadPayments() {
+    try {
+      setLoading(true);
+      setError("");
+
+      const response = await getAdminPayments({
+  page,
+  limit: 20,
+  status:
+    statusFilter === "All"
+      ? undefined
+      : {
+          Pending: "PENDING",
+          Paid: "SUCCEEDED",
+          Failed: "FAILED",
+          Refunded: "REFUNDED",
+          "Partially Refunded": "PARTIALLY_REFUNDED",
+        }[statusFilter],
+  search: debouncedSearch,
+  startDate,
+  endDate,
+});
+
+      if (!active) return;
+
+      const records = response.data ?? [];
+
+      const formattedPayments = records.map((payment) => ({
+        ...payment,
+
+        amount: Number(payment.amount ?? 0),
+        refundedAmount: Number(payment.refundedAmount ?? 0),
+
+        status: statusMap[payment.status] ?? payment.status,
+
+        bookingId:
+          payment.booking?.reference ?? payment.bookingId,
+
+        customer:
+          payment.booking?.customer?.fullName ?? "Unknown Customer",
+
+        email:
+          payment.booking?.customer?.email ?? "Not available",
+
+        method: "Stripe",
+
+        provider: "Stripe",
+      }));
+
+      setPaymentTransactions(formattedPayments);
+      setPagination(response.pagination);
+    } catch (err) {
+      if (!active) return;
+
+      console.error("Failed to load payments:", err);
+      setError(err.message || "Unable to load payment transactions.");
+    } finally {
+      if (active) setLoading(false);
+    }
+  }
+
+  loadPayments();
+
+  return () => {
+    active = false;
+  };
+}, [
+   page,
+  statusFilter,
+  debouncedSearch,
+  startDate,
+  endDate,
+]);
+
+useEffect(() => {
+  setPage(1);
+}, [statusFilter, debouncedSearch, startDate, endDate]);
+
+
+useEffect(() => {
+  let active = true;
+
+  async function loadSummary() {
+    try {
+      setSummaryLoading(true);
+      setSummaryError("");
+
+      const response = await getAdminPaymentSummary();
+
+      if (!active) return;
+
+      setPaymentSummary(response.data);
+    } catch (err) {
+      if (!active) return;
+
+      console.error("Failed to load payment summary:", err);
+
+      setSummaryError(
+        err.message || "Unable to load payment summary."
       );
-    });
-  }, [
-    search,
-    statusFilter,
-    methodFilter,
-    startDate,
-    endDate,
-  ]);
+    } finally {
+      if (active) {
+        setSummaryLoading(false);
+      }
+    }
+  }
 
-  const successfulAmount = paymentTransactions
-    .filter((payment) =>
-      ["Paid", "Refunded", "Partially Refunded"].includes(
-        payment.status
-      )
-    )
-    .reduce((total, payment) => total + payment.amount, 0);
+  loadSummary();
 
-  const refundedAmount = paymentTransactions.reduce(
-    (total, payment) =>
-      total + payment.refundedAmount,
-    0
-  );
+  return () => {
+    active = false;
+  };
+}, []);
 
-  const pendingAmount = paymentTransactions
-    .filter((payment) => payment.status === "Pending")
-    .reduce((total, payment) => total + payment.amount, 0);
 
-  const failedAmount = paymentTransactions
-    .filter((payment) => payment.status === "Failed")
-    .reduce((total, payment) => total + payment.amount, 0);
+  const filteredPayments = paymentTransactions;
+
+const successfulAmount = paymentSummary?.grossSuccessful ?? 0;
+const pendingAmount = paymentSummary?.pendingAmount ?? 0;
+const refundedAmount = paymentSummary?.refundedAmount ?? 0;
+const failedAmount = paymentSummary?.failedAmount ?? 0;
 
   const resetFilters = () => {
     setSearch("");
@@ -140,6 +241,7 @@ function Payments() {
     setMethodFilter("All");
     setStartDate("");
     setEndDate("");
+    setPage(1);
   };
 
   const selectClass =
@@ -158,36 +260,66 @@ function Payments() {
           refunds, and transaction records.
         </p>
 
-        <p className="mt-2 text-xs font-semibold text-amber-700">
-          Demo transactions — not actual revenue
-        </p>
+        <p className="mt-2 text-xs font-medium text-slate-500">
+  Stripe payment transactions recorded in ViewForMe.
+</p>
       </div>
 
       {/* SUMMARY */}
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard
-          title="Successful Payments (Gross)"
-          value={formatCurrency(successfulAmount)}
-          icon={CircleCheck}
-        />
+       <SummaryCard
+  title="Successful Payments (Gross)"
+  value={
+    summaryLoading
+      ? "Loading..."
+      : summaryError
+        ? "Unavailable"
+        : formatCurrency(successfulAmount)
+  }
+  icon={CircleCheck}
+/>
 
-        <SummaryCard
-          title="Pending Payments"
-          value={formatCurrency(pendingAmount)}
-          icon={Clock3}
-        />
+<SummaryCard
+  title="Pending Payments"
+  value={
+    summaryLoading
+      ? "Loading..."
+      : summaryError
+        ? "Unavailable"
+        : formatCurrency(pendingAmount)
+  }
+  icon={Clock3}
+/>
 
-        <SummaryCard
-          title="Refunded Amount"
-          value={formatCurrency(refundedAmount)}
-          icon={RefreshCw}
-        />
+<SummaryCard
+  title="Refunded Amount"
+  value={
+    summaryLoading
+      ? "Loading..."
+      : summaryError
+        ? "Unavailable"
+        : formatCurrency(refundedAmount)
+  }
+  icon={RefreshCw}
+/>
 
-        <SummaryCard
-          title="Failed Attempts"
-          value={formatCurrency(failedAmount)}
-          icon={CircleAlert}
-        />
+<SummaryCard
+  title="Failed Attempts"
+  value={
+    summaryLoading
+      ? "Loading..."
+      : summaryError
+        ? "Unavailable"
+        : formatCurrency(failedAmount)
+  }
+  icon={CircleAlert}
+/>
+
+{summaryError && (
+  <p role="alert" className="text-sm text-red-600">
+    {summaryError}
+  </p>
+)}
       </div>
 
       {/* FILTERS */}
@@ -320,6 +452,21 @@ function Payments() {
         </div>
       </section>
 
+      {loading && (
+  <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600">
+    Loading payment transactions...
+  </div>
+)}
+
+{error && (
+  <div
+    role="alert"
+    className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700"
+  >
+    {error}
+  </div>
+)}
+
       {/* TRANSACTIONS */}
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="border-b border-slate-100 p-6">
@@ -328,11 +475,11 @@ function Payments() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-500">
-            {filteredPayments.length} matching transactions
+            {pagination.total} matching transactions
           </p>
         </div>
 
-        {filteredPayments.length > 0 ? (
+        {!loading && !error && filteredPayments.length > 0 ? (
           <>
             {/* DESKTOP TABLE */}
             <div className="hidden overflow-x-auto lg:block">
@@ -483,6 +630,36 @@ function Payments() {
             </button>
           </div>
         )}
+
+        {!loading && !error && pagination.totalPages > 1 && (
+  <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 px-6 py-5">
+    <p className="text-sm text-slate-500">
+      Page {pagination.page} of {pagination.totalPages}
+      {" · "}
+      {pagination.total} transactions
+    </p>
+
+    <div className="flex gap-3">
+      <button
+        type="button"
+        disabled={page <= 1}
+        onClick={() => setPage((current) => current - 1)}
+        className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Previous
+      </button>
+
+      <button
+        type="button"
+        disabled={page >= pagination.totalPages}
+        onClick={() => setPage((current) => current + 1)}
+        className="rounded-lg bg-[#2A9D8F] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Next
+      </button>
+    </div>
+  </div>
+)}
       </section>
     </div>
   );

@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Settings,
   LogOut,
+  LogIn,
   X,
 } from "lucide-react";
 
@@ -57,7 +58,17 @@ const menuItems = [
   },
 ];
 
-function AdminSidebar({ isOpen, onClose }) {
+function AdminSidebar({
+  isOpen,
+  onClose,
+  isAuthenticated = false,
+  onLogout,
+}) {
+  const handleLogout = () => {
+    onClose?.();
+    onLogout?.();
+  };
+
   return (
     <>
       {isOpen && (
@@ -74,11 +85,14 @@ function AdminSidebar({ isOpen, onClose }) {
           isOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
+        {/* HEADER */}
+
         <div className="flex h-20 items-center justify-between border-b border-white/10 px-6">
           <div>
             <h2 className="text-xl font-extrabold">
               ViewForMe
             </h2>
+
             <p className="text-xs text-[#78D6C9]">
               Admin Portal
             </p>
@@ -93,6 +107,8 @@ function AdminSidebar({ isOpen, onClose }) {
             <X size={22} />
           </button>
         </div>
+
+        {/* NAVIGATION */}
 
         <nav
           aria-label="Admin navigation"
@@ -121,24 +137,42 @@ function AdminSidebar({ isOpen, onClose }) {
           })}
         </nav>
 
+        {/* ACCOUNT SECTION */}
+
         <div className="border-t border-white/10 p-4">
           <div className="mb-4 rounded-xl bg-white/10 p-3">
             <p className="text-sm font-semibold">
-              Administrator
+              {isAuthenticated
+                ? "Administrator"
+                : "Guest"}
             </p>
+
             <p className="text-xs text-slate-300">
-              ViewForMe Management
+              {isAuthenticated
+                ? "ViewForMe Management"
+                : "Sign in to manage ViewForMe"}
             </p>
           </div>
 
-          <NavLink
-            to="/admin/login"
-            onClick={onClose}
-            className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white"
-          >
-            <LogOut size={19} />
-            Back to Login
-          </NavLink>
+          {isAuthenticated ? (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm text-slate-300 transition hover:bg-red-500/20 hover:text-red-300"
+            >
+              <LogOut size={19} />
+              Logout
+            </button>
+          ) : (
+            <NavLink
+              to="/admin/login"
+              onClick={onClose}
+              className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-slate-300 transition hover:bg-white/10 hover:text-white"
+            >
+              <LogIn size={19} />
+              Sign In
+            </NavLink>
+          )}
         </div>
       </aside>
     </>

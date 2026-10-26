@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -12,25 +12,77 @@ import {
   RotateCcw,
   ArrowRight,
   CalendarDays,
+  AlertCircle,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
 
 import StatusBadge from "../../components/admin/StatusBadge";
 
-import {
-  customerEnquiries,
-  enquiryStatuses,
-  enquiryCategories,
-} from "../../data/adminMockData";
+import { getAdminEnquiries } from "../../services/adminEnquiryApi.js";
+
+const STATUS_OPTIONS = [
+  { value: "NEW", label: "New" },
+  { value: "IN_PROGRESS", label: "In Progress" },
+  { value: "RESOLVED", label: "Resolved" },
+  { value: "CLOSED", label: "Closed" },
+];
+
+const ENQUIRY_TYPES = [
+  { value: "general", label: "General Enquiry" },
+  { value: "booking", label: "New Booking Enquiry" },
+  { value: "existing-booking", label: "Existing Booking" },
+  { value: "property-agent", label: "Property Agent / Landlord" },
+  { value: "viewer", label: "Become a Viewer" },
+  { value: "partnership", label: "Business Partnership" },
+  { value: "complaint", label: "Feedback or Complaint" },
+  { value: "other", label: "Other" },
+];
+
+const EMPTY_STATS = {
+  total: 0,
+  new: 0,
+  inProgress: 0,
+  resolved: 0,
+  closed: 0,
+};
 
 const formatDate = (value) => {
   if (!value) return "Not available";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Not available";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/London",
+  }).format(date);
+};
+
+const getStatusLabel = (status) => {
+  const labels = {
+    NEW: "New",
+    IN_PROGRESS: "In Progress",
+    RESOLVED: "Resolved",
+    CLOSED: "Closed",
+  };
+
+  return labels[status] || status || "Unknown";
+};
+
+const getEnquiryTypeLabel = (type) => {
+  return (
+    ENQUIRY_TYPES.find((item) => item.value === type)?.label ||
+    type ||
+    "Not specified"
+  );
 };
 
 function SummaryCard({ title, value, icon: Icon }) {
@@ -54,60 +106,103 @@ function SummaryCard({ title, value, icon: Icon }) {
 }
 
 function Enquiries() {
+  const [enquiries, setEnquiries] = useState([]);
+  const [stats, setStats] = useState(EMPTY_STATS);
+
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
 
-  const filteredEnquiries = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [typeFilter, setTypeFilter] = useState("ALL");
 
-    return customerEnquiries.filter((enquiry) => {
-      const matchesSearch =
-        !query ||
-        [
-          enquiry.id,
-          enquiry.name,
-          enquiry.email,
-          enquiry.subject,
-          enquiry.message,
-        ].some((value) =>
-          String(value || "").toLowerCase().includes(query)
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Debounce search requests
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Fetch enquiries from backend
+  useEffect(() => {
+    let active = true;
+
+    const fetchEnquiries = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await getAdminEnquiries({
+          search: debouncedSearch,
+          status: statusFilter,
+        });
+
+        if (!active) return;
+
+        if (response?.success !== true) {
+          throw new Error(
+            response?.message || "Failed to fetch enquiries."
+          );
+        }
+
+        setEnquiries(
+          Array.isArray(response?.data?.enquiries)
+            ? response.data.enquiries
+            : []
         );
 
-      const matchesStatus =
-        statusFilter === "All" ||
-        enquiry.status === statusFilter;
+        setStats({
+          ...EMPTY_STATS,
+          ...(response?.data?.stats || {}),
+        });
+      } catch (err) {
+        if (!active) return;
 
-      const matchesCategory =
-        categoryFilter === "All" ||
-        enquiry.category === categoryFilter;
+        setError(
+          err?.message ||
+            "Unable to load enquiries. Please try again."
+        );
+      } finally {
+        if (active) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    };
 
-      return (
-        matchesSearch &&
-        matchesStatus &&
-        matchesCategory
-      );
-    });
-  }, [search, statusFilter, categoryFilter]);
+    fetchEnquiries();
 
-  const total = customerEnquiries.length;
+    return () => {
+      active = false;
+    };
+  }, [debouncedSearch, statusFilter, reloadKey]);
 
-  const newCount = customerEnquiries.filter(
-    (item) => item.status === "New"
-  ).length;
+  // Enquiry type filtering is client-side
+  const filteredEnquiries = useMemo(() => {
+    if (typeFilter === "ALL") {
+      return enquiries;
+    }
 
-  const inProgressCount = customerEnquiries.filter(
-    (item) => item.status === "In Progress"
-  ).length;
-
-  const resolvedCount = customerEnquiries.filter(
-    (item) => item.status === "Resolved"
-  ).length;
+    return enquiries.filter(
+      (enquiry) => enquiry.enquiryType === typeFilter
+    );
+  }, [enquiries, typeFilter]);
 
   const resetFilters = () => {
     setSearch("");
-    setStatusFilter("All");
-    setCategoryFilter("All");
+    setStatusFilter("ALL");
+    setTypeFilter("ALL");
+  };
+
+  const refreshEnquiries = () => {
+    setRefreshing(true);
+    setReloadKey((previous) => previous + 1);
   };
 
   const selectClass =
@@ -116,51 +211,62 @@ function Enquiries() {
   return (
     <div className="space-y-8">
       {/* HEADER */}
-      <div>
-        <h1 className="text-2xl font-extrabold text-[#17324D] sm:text-3xl">
-          Customer Enquiries
-        </h1>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold text-[#17324D] sm:text-3xl">
+            Customer Enquiries
+          </h1>
 
-        <p className="mt-2 text-sm text-slate-600">
-          Review customer messages, track responses,
-          and manage outstanding enquiries.
-        </p>
+          <p className="mt-2 text-sm text-slate-600">
+            Review customer messages, track responses,
+            and manage outstanding enquiries.
+          </p>
+        </div>
 
-        <p className="mt-2 text-xs font-semibold text-amber-700">
-          Demo data — no live customer messages
-        </p>
+        <button
+          type="button"
+          onClick={refreshEnquiries}
+          disabled={loading}
+          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-[#17324D] transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <RefreshCw
+            size={17}
+            className={refreshing ? "animate-spin" : ""}
+          />
+          Refresh
+        </button>
       </div>
 
       {/* STATISTICS */}
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           title="Total Enquiries"
-          value={total}
+          value={stats.total}
           icon={MessagesSquare}
         />
 
         <SummaryCard
           title="New Enquiries"
-          value={newCount}
+          value={stats.new}
           icon={Mail}
         />
 
         <SummaryCard
           title="In Progress"
-          value={inProgressCount}
+          value={stats.inProgress}
           icon={Clock3}
         />
 
         <SummaryCard
           title="Resolved"
-          value={resolvedCount}
+          value={stats.resolved}
           icon={CheckCircle2}
         />
       </div>
 
       {/* FILTERS */}
       <section className="rounded-2xl border border-slate-200 bg-white p-6">
-        <div className="mb-6 flex items-center justify-between gap-3">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Filter
               size={20}
@@ -182,6 +288,7 @@ function Enquiries() {
           </button>
         </div>
 
+        {/* SEARCH */}
         <div className="relative">
           <Search
             size={19}
@@ -191,14 +298,17 @@ function Enquiries() {
           <input
             type="search"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by name, email, subject, or enquiry ID..."
+            onChange={(event) =>
+              setSearch(event.target.value)
+            }
+            placeholder="Search by name, email, subject, or message..."
             aria-label="Search enquiries"
             className="w-full rounded-xl border border-slate-200 py-3.5 pl-12 pr-4 text-sm outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100"
           />
         </div>
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          {/* STATUS FILTER */}
           <div>
             <label
               htmlFor="enquiry-status-filter"
@@ -215,43 +325,77 @@ function Enquiries() {
               }
               className={selectClass}
             >
-              <option value="All">All Statuses</option>
+              <option value="ALL">All Statuses</option>
 
-              {enquiryStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status}
+              {STATUS_OPTIONS.map((status) => (
+                <option
+                  key={status.value}
+                  value={status.value}
+                >
+                  {status.label}
                 </option>
               ))}
             </select>
           </div>
 
+          {/* ENQUIRY TYPE FILTER */}
           <div>
             <label
-              htmlFor="enquiry-category-filter"
+              htmlFor="enquiry-type-filter"
               className="mb-2 block text-sm font-semibold text-[#17324D]"
             >
-              Enquiry Category
+              Enquiry Type
             </label>
 
             <select
-              id="enquiry-category-filter"
-              value={categoryFilter}
+              id="enquiry-type-filter"
+              value={typeFilter}
               onChange={(event) =>
-                setCategoryFilter(event.target.value)
+                setTypeFilter(event.target.value)
               }
               className={selectClass}
             >
-              <option value="All">All Categories</option>
+              <option value="ALL">All Enquiry Types</option>
 
-              {enquiryCategories.map((category) => (
-                <option key={category} value={category}>
-                  {category}
+              {ENQUIRY_TYPES.map((type) => (
+                <option
+                  key={type.value}
+                  value={type.value}
+                >
+                  {type.label}
                 </option>
               ))}
             </select>
           </div>
         </div>
       </section>
+
+      {/* ERROR */}
+      {error && (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-5"
+        >
+          <AlertCircle
+            size={20}
+            className="mt-0.5 shrink-0 text-red-600"
+          />
+
+          <div className="flex-1">
+            <p className="text-sm font-medium text-red-800">
+              {error}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={refreshEnquiries}
+            className="text-sm font-semibold text-red-700 underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* ENQUIRIES DIRECTORY */}
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -261,23 +405,64 @@ function Enquiries() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-500">
-            {filteredEnquiries.length} matching enquiries
+            {loading
+              ? "Loading enquiries..."
+              : `${filteredEnquiries.length} matching enquiries`}
           </p>
         </div>
 
-        {filteredEnquiries.length > 0 ? (
+        {loading ? (
+          <div className="flex flex-col items-center justify-center gap-4 px-6 py-20">
+            <Loader2
+              size={35}
+              className="animate-spin text-[#2A9D8F]"
+            />
+
+            <p className="text-sm text-slate-500">
+              Loading customer enquiries...
+            </p>
+          </div>
+        ) : error ? (
+          <div className="px-6 py-16 text-center">
+            <AlertCircle
+              size={35}
+              className="mx-auto text-red-500"
+            />
+
+            <p className="mt-4 text-sm text-slate-600">
+              Unable to display enquiries.
+            </p>
+          </div>
+        ) : filteredEnquiries.length > 0 ? (
           <>
             {/* DESKTOP TABLE */}
             <div className="hidden overflow-x-auto lg:block">
               <table className="w-full min-w-[950px] text-left">
                 <thead className="bg-[#F6F9FA]">
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <th className="px-6 py-4">Customer</th>
-                    <th className="px-6 py-4">Subject</th>
-                    <th className="px-6 py-4">Category</th>
-                    <th className="px-6 py-4">Received</th>
-                    <th className="px-6 py-4">Status</th>
-                    <th className="px-6 py-4">Action</th>
+                    <th className="px-6 py-4">
+                      Customer
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Subject
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Enquiry Type
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Received
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Status
+                    </th>
+
+                    <th className="px-6 py-4">
+                      Action
+                    </th>
                   </tr>
                 </thead>
 
@@ -287,38 +472,53 @@ function Enquiries() {
                       key={enquiry.id}
                       className="text-sm text-slate-600 transition hover:bg-slate-50"
                     >
+                      {/* CUSTOMER */}
                       <td className="px-6 py-4">
                         <p className="font-bold text-[#17324D]">
-                          {enquiry.name}
+                          {enquiry.fullName}
                         </p>
 
                         <p className="mt-1 text-xs text-slate-500">
                           {enquiry.email}
                         </p>
 
-                        <p className="mt-1 text-xs text-slate-400">
+                        <p className="mt-1 max-w-[180px] truncate text-xs text-slate-400">
                           {enquiry.id}
                         </p>
                       </td>
 
+                      {/* SUBJECT */}
                       <td className="max-w-[240px] px-6 py-4">
                         <p className="line-clamp-2">
-                          {enquiry.subject}
+                          {enquiry.subject ||
+                            "No subject"}
                         </p>
                       </td>
 
+                      {/* TYPE */}
                       <td className="px-6 py-4">
-                        {enquiry.category}
+                        {getEnquiryTypeLabel(
+                          enquiry.enquiryType
+                        )}
                       </td>
 
+                      {/* DATE */}
                       <td className="whitespace-nowrap px-6 py-4">
-                        {formatDate(enquiry.createdAt)}
+                        {formatDate(
+                          enquiry.createdAt
+                        )}
                       </td>
 
+                      {/* STATUS */}
                       <td className="px-6 py-4">
-                        <StatusBadge status={enquiry.status} />
+                        <StatusBadge
+                          status={getStatusLabel(
+                            enquiry.status
+                          )}
+                        />
                       </td>
 
+                      {/* ACTION */}
                       <td className="px-6 py-4">
                         <Link
                           to={`/admin/enquiries/${enquiry.id}`}
@@ -337,31 +537,50 @@ function Enquiries() {
             {/* MOBILE CARDS */}
             <div className="divide-y divide-slate-100 lg:hidden">
               {filteredEnquiries.map((enquiry) => (
-                <div key={enquiry.id} className="p-5">
+                <div
+                  key={enquiry.id}
+                  className="p-5"
+                >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-bold text-[#17324D]">
-                        {enquiry.name}
+                        {enquiry.fullName}
                       </p>
 
                       <p className="mt-1 text-xs text-slate-500">
+                        {enquiry.email}
+                      </p>
+
+                      <p className="mt-1 max-w-[220px] truncate text-xs text-slate-400">
                         {enquiry.id}
                       </p>
                     </div>
 
-                    <StatusBadge status={enquiry.status} />
+                    <StatusBadge
+                      status={getStatusLabel(
+                        enquiry.status
+                      )}
+                    />
                   </div>
 
                   <p className="mt-4 font-semibold text-[#17324D]">
-                    {enquiry.subject}
+                    {enquiry.subject ||
+                      "No subject"}
                   </p>
 
                   <div className="mt-3 space-y-2 text-sm text-slate-600">
-                    <p>Category: {enquiry.category}</p>
+                    <p>
+                      Enquiry Type:{" "}
+                      {getEnquiryTypeLabel(
+                        enquiry.enquiryType
+                      )}
+                    </p>
 
                     <p className="flex items-center gap-2">
                       <CalendarDays size={16} />
-                      {formatDate(enquiry.createdAt)}
+                      {formatDate(
+                        enquiry.createdAt
+                      )}
                     </p>
                   </div>
 

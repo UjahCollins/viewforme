@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -18,19 +18,39 @@ import {
 import StatusBadge from "../../components/admin/StatusBadge";
 
 import {
-  viewingReports,
-  reportStatuses,
-} from "../../data/adminMockData";
+  getAdminReports,
+  getAdminReportSummary,
+} from "../../services/adminReportService";
+
+const statusOptions = [
+  { value: "DRAFT", label: "Draft" },
+  { value: "SUBMITTED", label: "Awaiting Review" },
+  { value: "APPROVED", label: "Ready for Delivery" },
+  { value: "DELIVERED", label: "Delivered" },
+];
+
+const statusLabels = {
+  DRAFT: "Draft",
+  SUBMITTED: "Awaiting Review",
+  APPROVED: "Ready",
+  DELIVERED: "Delivered",
+};
 
 const formatDate = (value) => {
   if (!value) return "Not available";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Not available";
+  }
 
   return new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${value}T12:00:00Z`));
+    timeZone: "Europe/London",
+  }).format(date);
 };
 
 function SummaryCard({ title, value, icon: Icon }) {
@@ -54,66 +74,149 @@ function SummaryCard({ title, value, icon: Icon }) {
 }
 
 function Reports() {
+  const [reports, setReports] = useState([]);
+
+  const [summary, setSummary] = useState({
+    total: 0,
+    draft: 0,
+    submitted: 0,
+    approved: 0,
+    delivered: 0,
+  });
+
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [serviceFilter, setServiceFilter] = useState("All");
 
-  const services = [
-    ...new Set(viewingReports.map((report) => report.service)),
-  ].sort();
+  const [services, setServices] = useState([]);
 
-  const filteredReports = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    limit: 20,
+    total: 0,
+    totalPages: 0,
+  });
 
-    return viewingReports.filter((report) => {
-      const matchesSearch =
-        !query ||
-        [
-          report.id,
-          report.bookingId,
-          report.customer,
-          report.viewer,
-          report.location,
-          report.service,
-        ].some((value) =>
-          String(value || "").toLowerCase().includes(query)
+  const [loading, setLoading] = useState(true);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [summaryError, setSummaryError] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadSummary() {
+      try {
+        setSummaryLoading(true);
+        setSummaryError("");
+
+        const response = await getAdminReportSummary();
+
+        if (active) {
+          setSummary(response.data);
+        }
+      } catch (err) {
+        if (active) {
+          setSummaryError(
+            err.message || "Unable to load report statistics."
+          );
+        }
+      } finally {
+        if (active) setSummaryLoading(false);
+      }
+    }
+
+    loadSummary();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadReports() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await getAdminReports({
+          page,
+          limit: 20,
+          search: debouncedSearch,
+          status: statusFilter,
+          serviceId: serviceFilter,
+        });
+
+        if (!active) return;
+
+        const items = response.data || [];
+
+        setReports(items);
+
+        setPagination(
+          response.pagination || {
+            page,
+            limit: 20,
+            total: items.length,
+            totalPages: 1,
+          }
         );
 
-      const matchesStatus =
-        statusFilter === "All" ||
-        report.status === statusFilter;
+        // Collect service options from retrieved reports.
+        setServices((previous) => {
+          const serviceMap = new Map(
+            previous.map((service) => [service.id, service])
+          );
 
-      const matchesService =
-        serviceFilter === "All" ||
-        report.service === serviceFilter;
+          items.forEach((report) => {
+            const service = report.booking?.service;
 
-      return (
-        matchesSearch &&
-        matchesStatus &&
-        matchesService
-      );
-    });
-  }, [search, statusFilter, serviceFilter]);
+            if (service?.id) {
+              serviceMap.set(service.id, service);
+            }
+          });
+
+          return Array.from(serviceMap.values()).sort((a, b) =>
+            a.name.localeCompare(b.name)
+          );
+        });
+      } catch (err) {
+        if (active) {
+          setError(err.message || "Unable to load reports.");
+          setReports([]);
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    loadReports();
+
+    return () => {
+      active = false;
+    };
+  }, [page, debouncedSearch, statusFilter, serviceFilter]);
 
   const resetFilters = () => {
     setSearch("");
+    setDebouncedSearch("");
     setStatusFilter("All");
     setServiceFilter("All");
+    setPage(1);
   };
-
-  const totalReports = viewingReports.length;
-
-  const awaitingReports = viewingReports.filter(
-    (report) => report.status === "Awaiting Materials"
-  ).length;
-
-  const readyReports = viewingReports.filter(
-    (report) => report.status === "Ready"
-  ).length;
-
-  const deliveredReports = viewingReports.filter(
-    (report) => report.status === "Delivered"
-  ).length;
 
   const selectClass =
     "w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-[#17324D] outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100";
@@ -130,38 +233,40 @@ function Reports() {
           Track viewing reports, submitted materials,
           administrative reviews, and customer delivery.
         </p>
-
-        <p className="mt-2 text-xs font-semibold text-amber-700">
-          Demo data — no real reports or media files
-        </p>
       </div>
 
       {/* STATISTICS */}
       <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           title="Total Reports"
-          value={totalReports}
+          value={summaryLoading ? "..." : summary.total}
           icon={FileImage}
         />
 
         <SummaryCard
-          title="Awaiting Materials"
-          value={awaitingReports}
+          title="Awaiting Review"
+          value={summaryLoading ? "..." : summary.submitted}
           icon={Clock3}
         />
 
         <SummaryCard
           title="Ready for Delivery"
-          value={readyReports}
+          value={summaryLoading ? "..." : summary.approved}
           icon={ClipboardCheck}
         />
 
         <SummaryCard
           title="Delivered"
-          value={deliveredReports}
+          value={summaryLoading ? "..." : summary.delivered}
           icon={Send}
         />
       </div>
+
+      {summaryError && (
+        <p role="alert" className="text-sm text-red-600">
+          {summaryError}
+        </p>
+      )}
 
       {/* FILTERS */}
       <section className="rounded-2xl border border-slate-200 bg-white p-6">
@@ -193,8 +298,11 @@ function Reports() {
           <input
             type="search"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search by report ID, booking ID, customer, or viewer..."
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(1);
+            }}
+            placeholder="Search by report title, booking reference, customer, or viewer..."
             aria-label="Search reports"
             className="w-full rounded-xl border border-slate-200 py-3.5 pl-12 pr-4 text-sm outline-none focus:border-[#2A9D8F] focus:ring-2 focus:ring-teal-100"
           />
@@ -212,16 +320,17 @@ function Reports() {
             <select
               id="report-status-filter"
               value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(event.target.value)
-              }
+              onChange={(event) => {
+                setStatusFilter(event.target.value);
+                setPage(1);
+              }}
               className={selectClass}
             >
               <option value="All">All Statuses</option>
 
-              {reportStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status}
+              {statusOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -238,16 +347,17 @@ function Reports() {
             <select
               id="report-service-filter"
               value={serviceFilter}
-              onChange={(event) =>
-                setServiceFilter(event.target.value)
-              }
+              onChange={(event) => {
+                setServiceFilter(event.target.value);
+                setPage(1);
+              }}
               className={selectClass}
             >
               <option value="All">All Services</option>
 
               {services.map((service) => (
-                <option key={service} value={service}>
-                  {service}
+                <option key={service.id} value={service.id}>
+                  {service.name}
                 </option>
               ))}
             </select>
@@ -263,11 +373,23 @@ function Reports() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-500">
-            {filteredReports.length} matching reports
+            {loading
+              ? "Loading reports..."
+              : `${pagination.total} matching reports`}
           </p>
         </div>
 
-        {filteredReports.length > 0 ? (
+        {error && (
+          <div role="alert" className="p-6 text-sm text-red-600">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="p-12 text-center text-sm text-slate-500">
+            Loading viewing reports...
+          </div>
+        ) : reports.length > 0 ? (
           <>
             {/* DESKTOP TABLE */}
             <div className="hidden overflow-x-auto lg:block">
@@ -285,105 +407,162 @@ function Reports() {
                 </thead>
 
                 <tbody className="divide-y divide-slate-100">
-                  {filteredReports.map((report) => (
-                    <tr
-                      key={report.id}
-                      className="text-sm text-slate-600 transition hover:bg-slate-50"
-                    >
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-[#17324D]">
-                          {report.id}
-                        </p>
+                  {reports.map((report) => {
+                    const booking = report.booking;
+                    const viewer =
+                      booking?.assignments?.[0]?.viewer;
 
-                        <p className="mt-1 text-xs text-slate-400">
-                          {report.bookingId}
-                        </p>
-                      </td>
+                    return (
+                      <tr
+                        key={report.id}
+                        className="text-sm text-slate-600 transition hover:bg-slate-50"
+                      >
+                        <td className="px-6 py-4">
+                          <p className="font-bold text-[#17324D]">
+                            {report.title}
+                          </p>
 
-                      <td className="px-6 py-4">
-                        {report.customer}
-                      </td>
+                          <p className="mt-1 text-xs text-slate-400">
+                            {booking?.reference || report.id}
+                          </p>
+                        </td>
 
-                      <td className="px-6 py-4">
-                        {report.viewer}
-                      </td>
+                        <td className="px-6 py-4">
+                          {booking?.customer?.fullName || "Not available"}
+                        </td>
 
-                      <td className="px-6 py-4">
-                        {report.service}
-                      </td>
+                        <td className="px-6 py-4">
+                          {viewer?.fullName || "Not assigned"}
+                        </td>
 
-                      <td className="whitespace-nowrap px-6 py-4">
-                        {formatDate(report.viewingDate)}
-                      </td>
+                        <td className="px-6 py-4">
+                          {booking?.service?.name || "Not available"}
+                        </td>
 
-                      <td className="px-6 py-4">
-                        <StatusBadge status={report.status} />
-                      </td>
+                        <td className="whitespace-nowrap px-6 py-4">
+                          {formatDate(booking?.preferredDate)}
+                        </td>
 
-                      <td className="px-6 py-4">
-                        <Link
-                          to={`/admin/reports/${report.id}`}
-                          className="inline-flex items-center gap-1 font-semibold text-[#2A9D8F] hover:underline"
-                        >
-                          View Report
-                          <ArrowRight size={16} />
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="px-6 py-4">
+                          <StatusBadge
+                            status={
+                              statusLabels[report.status] || report.status
+                            }
+                          />
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <Link
+                            to={`/admin/reports/${report.id}`}
+                            className="inline-flex items-center gap-1 font-semibold text-[#2A9D8F] hover:underline"
+                          >
+                            View Report
+                            <ArrowRight size={16} />
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             {/* MOBILE CARDS */}
             <div className="divide-y divide-slate-100 lg:hidden">
-              {filteredReports.map((report) => (
-                <div key={report.id} className="p-5">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="font-bold text-[#17324D]">
-                        {report.id}
+              {reports.map((report) => {
+                const booking = report.booking;
+                const viewer =
+                  booking?.assignments?.[0]?.viewer;
+
+                return (
+                  <div key={report.id} className="p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-bold text-[#17324D]">
+                          {report.title}
+                        </p>
+
+                        <p className="mt-1 text-xs text-slate-500">
+                          Booking {booking?.reference || "Not available"}
+                        </p>
+                      </div>
+
+                      <StatusBadge
+                        status={
+                          statusLabels[report.status] || report.status
+                        }
+                      />
+                    </div>
+
+                    <p className="mt-4 text-sm font-semibold text-[#17324D]">
+                      {booking?.service?.name || "Not available"}
+                    </p>
+
+                    <div className="mt-3 space-y-2 text-sm text-slate-600">
+                      <p>
+                        Customer: {booking?.customer?.fullName || "Not available"}
                       </p>
 
-                      <p className="mt-1 text-xs text-slate-500">
-                        Booking {report.bookingId}
+                      <p>
+                        Viewer: {viewer?.fullName || "Not assigned"}
+                      </p>
+
+                      <p className="flex items-center gap-2">
+                        <MapPin size={16} />
+                        {[
+                          booking?.propertyAddress,
+                          booking?.propertyCity,
+                        ]
+                          .filter(Boolean)
+                          .join(", ") || "Not available"}
+                      </p>
+
+                      <p className="flex items-center gap-2">
+                        <CalendarDays size={16} />
+                        {formatDate(booking?.preferredDate)}
                       </p>
                     </div>
 
-                    <StatusBadge status={report.status} />
+                    <Link
+                      to={`/admin/reports/${report.id}`}
+                      className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-[#2A9D8F]"
+                    >
+                      View Report
+                      <ArrowRight size={16} />
+                    </Link>
                   </div>
+                );
+              })}
+            </div>
 
-                  <p className="mt-4 text-sm font-semibold text-[#17324D]">
-                    {report.service}
-                  </p>
+            {/* PAGINATION */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 p-6">
+              <p className="text-sm text-slate-500">
+                Page {pagination.page} of {pagination.totalPages}
+              </p>
 
-                  <div className="mt-3 space-y-2 text-sm text-slate-600">
-                    <p>Customer: {report.customer}</p>
-                    <p>Viewer: {report.viewer}</p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((current) => current - 1)}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-[#17324D] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
 
-                    <p className="flex items-center gap-2">
-                      <MapPin size={16} />
-                      {report.location}
-                    </p>
-
-                    <p className="flex items-center gap-2">
-                      <CalendarDays size={16} />
-                      {formatDate(report.viewingDate)}
-                    </p>
-                  </div>
-
-                  <Link
-                    to={`/admin/reports/${report.id}`}
-                    className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-[#2A9D8F]"
-                  >
-                    View Report
-                    <ArrowRight size={16} />
-                  </Link>
-                </div>
-              ))}
+                <button
+                  type="button"
+                  disabled={page >= pagination.totalPages}
+                  onClick={() => setPage((current) => current + 1)}
+                  className="rounded-xl bg-[#2A9D8F] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </>
-        ) : (
+        ) : !error ? (
           <div className="px-6 py-20 text-center">
             <Search
               size={35}
@@ -406,7 +585,7 @@ function Reports() {
               Clear Filters
             </button>
           </div>
-        )}
+        ) : null}
       </section>
     </div>
   );
