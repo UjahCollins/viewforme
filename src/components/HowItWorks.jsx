@@ -93,6 +93,42 @@ function HowItWorks() {
           })}
         </div>
 
+        
+{/* How It Works Video */}
+<div className="mx-auto mt-16 max-w-4xl">
+  <div className="mb-8 text-center">
+    <span className="text-sm font-bold uppercase tracking-[0.18em] text-[#2A9D8F]">
+      Watch & Discover
+    </span>
+
+    <h3 className="mt-3 text-2xl font-extrabold tracking-tight text-[#17324D] sm:text-3xl">
+      See ViewForMe in Action
+    </h3>
+
+    <p className="mx-auto mt-3 max-w-2xl text-base leading-7 text-slate-600">
+      Watch our quick video to discover how easy it is to
+      view a property from anywhere with ViewForMe.
+    </p>
+  </div>
+
+  <div className="overflow-hidden rounded-2xl border border-slate-100 bg-[#17324D] shadow-xl shadow-slate-900/10">
+    <video
+      controls
+      playsInline
+      preload="metadata"
+      className="aspect-video w-full object-contain"
+      aria-label="How ViewForMe Works video"
+    >
+      <source
+        src="https://res.cloudinary.com/je2503b8/video/upload/v1793092455/viewforme_masterpiece.mp4"
+        type="video/mp4"
+      />
+      Your browser does not support HTML5 video.
+    </video>
+  </div>
+</div>
+
+
         {/* Bottom CTA */}
         <div className="mt-12 flex flex-col items-center gap-4 text-center">
           <p className="text-base font-medium text-slate-600">

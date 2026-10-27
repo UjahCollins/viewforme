@@ -77,7 +77,7 @@ function Hero() {
 
           <div className="relative overflow-hidden rounded-[2rem] bg-slate-100 shadow-2xl shadow-slate-900/10">
             <img
-              src="https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=1200&q=85"
+              src="https://res.cloudinary.com/je2503b8/image/upload/v1793092266/IMG_0958.jpg"
               alt="Modern residential property with landscaped grounds"
               className="h-[360px] w-full object-cover sm:h-[480px] lg:h-[560px]"
             />

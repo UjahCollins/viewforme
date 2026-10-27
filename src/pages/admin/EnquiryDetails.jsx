@@ -308,6 +308,34 @@ ViewForMe Support Team`;
     `?subject=${encodeURIComponent(replySubject)}` +
     `&body=${encodeURIComponent(replyBody)}`;
 
+  const whatsappPhone = (() => {
+    const phone = (enquiry.phone || "").replace(/\D/g, "");
+
+    if (!phone) return "";
+
+    if (phone.startsWith("0044")) return phone.slice(2);
+    if (phone.startsWith("44")) return phone;
+    if (phone.startsWith("0")) return `44${phone.slice(1)}`;
+
+    return phone;
+  })();
+
+  // WhatsApp direct response
+  const whatsappMessage = `Hello ${enquiry.fullName || "Customer"},
+
+Thank you for contacting ViewForMe.
+
+We are reaching out regarding your enquiry:
+
+"${enquiry.subject || "General enquiry"}"
+
+Kind regards,
+ViewForMe Support Team`;
+
+  const whatsappLink = whatsappPhone
+    ? `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(whatsappMessage)}`
+    : null;
+
   const hasStatusChanged = status !== enquiry.status;
 
   return (
@@ -361,6 +389,19 @@ ViewForMe Support Team`;
             <Send size={18} />
             Reply by Email
           </a>
+
+          {/* WhatsApp Direct Response */}
+          {whatsappLink && (
+            <a
+              href={whatsappLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#25D366] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#1DA851]"
+            >
+              <MessageSquare size={18} />
+              Reply via WhatsApp
+            </a>
+          )}
         </div>
       </div>
 
