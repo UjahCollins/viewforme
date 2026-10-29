@@ -42,8 +42,8 @@ const contactMethods = [
     icon: Mail,
     title: "Email Us",
     description: "For general enquiries and customer support.",
-    value: "viewforme@property.co.uk",
-    href: "mailto:viewforme@property.co.uk",
+    value: "support@viewforme.org",
+    href: "mailto:support@viewforme.org",
     action: "Send an Email",
   },
   {

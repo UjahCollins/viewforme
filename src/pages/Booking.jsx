@@ -629,7 +629,7 @@ if (
         <p className="mt-8 text-center text-sm text-slate-500">
           Need assistance?{" "}
           <a
-            href="mailto:viewforme@property.co.uk"
+            href="mailto:support@viewforme.org"
             className="font-semibold text-[#2A9D8F] hover:underline"
           >
             Contact our team

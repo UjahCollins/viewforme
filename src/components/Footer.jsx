@@ -118,12 +118,12 @@ function Footer() {
 
             <div className="mt-6 space-y-5">
               <a
-                href="mailto:viewforme@property.co.uk"
+                href="mailto:support@viewforme.org"
                 className="flex items-start gap-3 text-sm text-slate-300 transition hover:text-[#78D6C9]"
               >
                 <Mail size={19} className="shrink-0 text-[#78D6C9]" />
                 <span className="break-all">
-                  viewforme@property.co.uk
+                  support@viewforme.org
                 </span>
               </a>
 

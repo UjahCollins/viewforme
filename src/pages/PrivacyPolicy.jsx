@@ -528,11 +528,11 @@ function PrivacyPolicy() {
               </p>
 
               <a
-                href="mailto:viewforme@property.co.uk"
+                href="mailto:support@viewforme.org"
                 className="inline-flex items-center gap-2 font-semibold text-[#2A9D8F] hover:underline"
               >
                 <Mail size={18} />
-                viewforme@property.co.uk
+                support@viewforme.org
               </a>
 
               <p>
