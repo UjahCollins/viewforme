@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   Building2,
@@ -15,7 +14,16 @@ import {
   CheckCircle2,
 } from "lucide-react";
 
-import { adminSettings } from "../../data/adminMockData";
+import { getCurrentAdmin } from "../../services/adminAuthApi.js";
+
+import {
+  getAdminSettings,
+  updateBusinessSettings,
+  updateBookingSettings,
+  updateNotificationSettings,
+  getSettingsServices,
+  updateSettingsService,
+} from "../../services/adminSettings.js";
 
 const sections = [
   {
@@ -62,6 +70,46 @@ const formatCurrency = (amount) =>
     currency: "GBP",
   }).format(amount);
 
+const clone = (value) => structuredClone(value);
+
+const defaultSettings = {
+  business: {
+    name: "",
+    tagline: "",
+    email: "",
+    phone: "",
+    website: "",
+    address: "",
+  },
+
+  booking: {
+    minimumNoticeHours: 24,
+    maximumAdvanceDays: 90,
+    appointmentStartTime: "09:00",
+    appointmentEndTime: "18:00",
+    requirePaymentBeforeCoordination: true,
+    requireAccessConfirmation: true,
+    requireViewerConfirmation: true,
+  },
+
+  notifications: {
+    newBooking: true,
+    paymentReceived: true,
+    newViewerApplication: true,
+    newEnquiry: true,
+    reportReady: true,
+    bookingCancelled: true,
+  },
+
+  services: [],
+
+  administrator: {
+    name: "",
+    email: "",
+    role: "",
+  },
+};
+
 function Field({ label, children }) {
   return (
     <label className="block">
@@ -71,7 +119,13 @@ function Field({ label, children }) {
   );
 }
 
-function Toggle({ checked, onChange, label, description }) {
+function Toggle({
+  checked,
+  onChange,
+  label,
+  description,
+  disabled = false,
+}) {
   return (
     <label className="flex cursor-pointer items-center justify-between gap-4 border-b border-slate-100 py-4 last:border-0">
       <div>
@@ -88,7 +142,8 @@ function Toggle({ checked, onChange, label, description }) {
 
       <input
         type="checkbox"
-        checked={checked}
+        checked={Boolean(checked)}
+        disabled={disabled}
         onChange={(event) =>
           onChange(event.target.checked)
         }
@@ -116,11 +171,120 @@ function Settings() {
   const [activeSection, setActiveSection] =
     useState("business");
 
-  const [settings, setSettings] = useState(() =>
-    structuredClone(adminSettings)
+  const [settings, setSettings] = useState(
+    clone(defaultSettings)
   );
 
+  const [savedSettings, setSavedSettings] = useState(
+    clone(defaultSettings)
+  );
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
   const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState("info");
+
+  const showNotice = (message, type = "info") => {
+    setNotice(message);
+    setNoticeType(type);
+  };
+
+  // =========================================
+  // LOAD SETTINGS
+  // =========================================
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSettings = async () => {
+      try {
+        setLoading(true);
+
+        const [
+          settingsResponse,
+          servicesResponse,
+          adminResponse,
+        ] = await Promise.all([
+          getAdminSettings(),
+          getSettingsServices(),
+          getCurrentAdmin(),
+        ]);
+
+        if (cancelled) return;
+
+        const platformData =
+          settingsResponse?.data ?? {};
+
+        const servicesData =
+          servicesResponse?.data?.services ?? [];
+
+        const adminData =
+          adminResponse?.data?.admin ??
+          adminResponse?.admin ??
+          adminResponse?.data ??
+          {};
+
+        const loadedSettings = {
+          business: {
+            ...defaultSettings.business,
+            ...(platformData.business ?? {}),
+          },
+
+          booking: {
+            ...defaultSettings.booking,
+            ...(platformData.booking ?? {}),
+          },
+
+          notifications: {
+            ...defaultSettings.notifications,
+            ...(platformData.notifications ?? {}),
+          },
+
+          services: Array.isArray(servicesData)
+            ? servicesData
+            : [],
+
+          administrator: {
+            name:
+              adminData.fullName ??
+              adminData.name ??
+              "",
+            email: adminData.email ?? "",
+            role: adminData.role ?? "",
+          },
+        };
+
+        setSettings(clone(loadedSettings));
+        setSavedSettings(clone(loadedSettings));
+        setNotice("");
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error("LOAD SETTINGS ERROR:", error);
+
+        showNotice(
+          error.message ||
+            "Unable to load admin settings.",
+          "error"
+        );
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // =========================================
+  // UPDATE LOCAL STATE
+  // =========================================
 
   const updateBusiness = (field, value) => {
     setSettings((previous) => ({
@@ -161,6 +325,7 @@ function Settings() {
   const updateService = (serviceId, field, value) => {
     setSettings((previous) => ({
       ...previous,
+
       services: previous.services.map((service) =>
         service.id === serviceId
           ? {
@@ -174,67 +339,338 @@ function Settings() {
     setNotice("");
   };
 
-  const resetSettings = () => {
-    setSettings(structuredClone(adminSettings));
+  // =========================================
+  // VALIDATION
+  // =========================================
 
-    setNotice(
-      "Demo settings have been restored to their original values."
-    );
+  const validateBusiness = () => {
+    const business = settings.business;
+
+    if (!business.name.trim()) {
+      return "Business name is required.";
+    }
+
+    if (!business.email.trim()) {
+      return "Support email is required.";
+    }
+
+    const emailPattern =
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailPattern.test(business.email)) {
+      return "Enter a valid support email.";
+    }
+
+    if (business.website) {
+      try {
+        const url = new URL(business.website);
+
+        if (
+          url.protocol !== "http:" &&
+          url.protocol !== "https:"
+        ) {
+          return "Enter a valid website URL.";
+        }
+      } catch {
+        return "Enter a valid website URL.";
+      }
+    }
+
+    return null;
   };
 
-  const handleValidate = () => {
-    const { business, booking, services } = settings;
+  const validateBooking = () => {
+    const booking = settings.booking;
 
-    if (!business.name.trim() || !business.email.trim()) {
-      setNotice(
-        "Business name and support email are required."
-      );
-      return;
+    if (
+      !Number.isInteger(booking.minimumNoticeHours) ||
+      booking.minimumNoticeHours < 0
+    ) {
+      return "Minimum notice must be a valid non-negative number.";
     }
 
     if (
-      !Number.isFinite(booking.minimumNoticeHours) ||
-      booking.minimumNoticeHours < 0 ||
-      !Number.isFinite(booking.maximumAdvanceDays) ||
+      !Number.isInteger(booking.maximumAdvanceDays) ||
       booking.maximumAdvanceDays < 1
     ) {
-      setNotice(
-        "Enter valid booking notice and advance booking limits."
-      );
-      return;
+      return "Maximum advance booking must be at least one day.";
     }
 
     if (
+      !booking.appointmentStartTime ||
+      !booking.appointmentEndTime ||
       booking.appointmentStartTime >=
-      booking.appointmentEndTime
+        booking.appointmentEndTime
     ) {
-      setNotice(
-        "The appointment end time must be later than the start time."
-      );
+      return "Appointment end time must be later than start time.";
+    }
+
+    return null;
+  };
+
+  const validateServices = () => {
+    for (const service of settings.services) {
+      if (service.pricingType === "QUOTE") {
+        continue;
+      }
+
+      const price = service.startingPrice;
+
+      if (
+        typeof price !== "number" ||
+        !Number.isFinite(price) ||
+        price < 0 ||
+        Math.abs(price * 100 - Math.round(price * 100)) >
+          0.000001
+      ) {
+        return `Enter a valid price for ${service.name}.`;
+      }
+    }
+
+    return null;
+  };
+
+  // =========================================
+  // SAVE SETTINGS
+  // =========================================
+
+  const handleSave = async () => {
+    if (saving || loading) return;
+
+    let validationError = null;
+
+    if (activeSection === "business") {
+      validationError = validateBusiness();
+    }
+
+    if (activeSection === "booking") {
+      validationError = validateBooking();
+    }
+
+    if (activeSection === "services") {
+      validationError = validateServices();
+    }
+
+    if (validationError) {
+      showNotice(validationError, "error");
       return;
     }
 
-    if (
-      services.some(
-        (service) =>
-          !Number.isFinite(service.startingPrice) ||
-          service.startingPrice < 0
-      )
-    ) {
-      setNotice(
-        "Service prices must be valid, non-negative amounts."
-      );
-      return;
-    }
+    try {
+      setSaving(true);
+      setNotice("");
 
-    setNotice(
-      "Demo settings validated successfully. No server settings have been changed."
+      if (activeSection === "business") {
+        const response = await updateBusinessSettings(
+          settings.business
+        );
+
+        const updatedBusiness =
+          response?.data?.business ??
+          settings.business;
+
+        setSettings((previous) => ({
+          ...previous,
+          business: clone(updatedBusiness),
+        }));
+
+        setSavedSettings((previous) => ({
+          ...previous,
+          business: clone(updatedBusiness),
+        }));
+      }
+
+      if (activeSection === "booking") {
+        const response = await updateBookingSettings(
+          settings.booking
+        );
+
+        const updatedBooking =
+          response?.data?.booking ??
+          settings.booking;
+
+        setSettings((previous) => ({
+          ...previous,
+          booking: clone(updatedBooking),
+        }));
+
+        setSavedSettings((previous) => ({
+          ...previous,
+          booking: clone(updatedBooking),
+        }));
+      }
+
+      if (activeSection === "notifications") {
+        const response =
+          await updateNotificationSettings(
+            settings.notifications
+          );
+
+        const updatedNotifications =
+          response?.data?.notifications ??
+          settings.notifications;
+
+        setSettings((previous) => ({
+          ...previous,
+          notifications: clone(updatedNotifications),
+        }));
+
+        setSavedSettings((previous) => ({
+          ...previous,
+          notifications: clone(updatedNotifications),
+        }));
+      }
+
+      if (activeSection === "services") {
+        const originalServices = savedSettings.services;
+
+        const changedServices = settings.services.filter(
+          (service) => {
+            const original = originalServices.find(
+              (item) => item.id === service.id
+            );
+
+            if (!original) return false;
+
+            return (
+              service.enabled !== original.enabled ||
+              (service.pricingType !== "QUOTE" &&
+                service.startingPrice !==
+                  original.startingPrice)
+            );
+          }
+        );
+
+        if (changedServices.length === 0) {
+          showNotice(
+            "No service changes to save.",
+            "info"
+          );
+          return;
+        }
+
+        const results = await Promise.allSettled(
+          changedServices.map((service) => {
+            const original = originalServices.find(
+              (item) => item.id === service.id
+            );
+
+            const payload = {};
+
+            if (service.enabled !== original.enabled) {
+              payload.enabled = service.enabled;
+            }
+
+            if (
+              service.pricingType !== "QUOTE" &&
+              service.startingPrice !==
+                original.startingPrice
+            ) {
+              payload.startingPrice =
+                service.startingPrice;
+            }
+
+            return updateSettingsService(
+              service.id,
+              payload
+            );
+          })
+        );
+
+        // Reload services after updates, including partial success.
+        const refreshedResponse =
+          await getSettingsServices();
+
+        const refreshedServices =
+          refreshedResponse?.data?.services ?? [];
+
+        setSettings((previous) => ({
+          ...previous,
+          services: clone(refreshedServices),
+        }));
+
+        setSavedSettings((previous) => ({
+          ...previous,
+          services: clone(refreshedServices),
+        }));
+
+        const failedCount = results.filter(
+          (result) => result.status === "rejected"
+        ).length;
+
+        if (failedCount > 0) {
+          showNotice(
+            `${failedCount} service update(s) failed. Successfully saved changes have been reloaded.`,
+            "error"
+          );
+          return;
+        }
+      }
+
+      showNotice(
+        "Settings saved successfully.",
+        "success"
+      );
+    } catch (error) {
+      console.error("SAVE SETTINGS ERROR:", error);
+
+      showNotice(
+        error.message ||
+          "Failed to save settings. Please try again.",
+        "error"
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // =========================================
+  // RESET UNSAVED CHANGES
+  // =========================================
+
+  const resetSettings = () => {
+    if (saving) return;
+
+    setSettings((previous) => ({
+      ...previous,
+
+      [activeSection]: clone(
+        savedSettings[activeSection]
+      ),
+    }));
+
+    showNotice(
+      "Unsaved changes have been discarded.",
+      "info"
     );
   };
+
+  // =========================================
+  // LOADING
+  // =========================================
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-[#2A9D8F] border-t-transparent" />
+
+          <p className="mt-4 text-sm font-semibold text-slate-600">
+            Loading admin settings...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================
+  // RENDER
+  // =========================================
 
   return (
     <div className="space-y-8">
       {/* HEADER */}
+
       <div>
         <h1 className="text-2xl font-extrabold text-[#17324D] sm:text-3xl">
           Admin Settings
@@ -244,24 +680,46 @@ function Settings() {
           Manage business information, services,
           operational preferences, and platform settings.
         </p>
-
-        <p className="mt-2 text-xs font-semibold text-amber-700">
-          Frontend demonstration — changes are not persisted
-        </p>
       </div>
 
       {/* NOTICE */}
+
       {notice && (
         <div
           role="status"
-          className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4"
+          className={`flex items-start gap-3 rounded-xl border p-4 ${
+            noticeType === "success"
+              ? "border-green-200 bg-green-50"
+              : noticeType === "error"
+              ? "border-red-200 bg-red-50"
+              : "border-blue-200 bg-blue-50"
+          }`}
         >
-          <Info
-            size={20}
-            className="mt-0.5 shrink-0 text-blue-700"
-          />
+          {noticeType === "success" ? (
+            <CheckCircle2
+              size={20}
+              className="mt-0.5 shrink-0 text-green-700"
+            />
+          ) : (
+            <Info
+              size={20}
+              className={`mt-0.5 shrink-0 ${
+                noticeType === "error"
+                  ? "text-red-700"
+                  : "text-blue-700"
+              }`}
+            />
+          )}
 
-          <p className="text-sm leading-7 text-blue-800">
+          <p
+            className={`text-sm leading-7 ${
+              noticeType === "success"
+                ? "text-green-800"
+                : noticeType === "error"
+                ? "text-red-800"
+                : "text-blue-800"
+            }`}
+          >
             {notice}
           </p>
         </div>
@@ -269,6 +727,7 @@ function Settings() {
 
       <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
         {/* SETTINGS NAVIGATION */}
+
         <aside className="min-w-0">
           <nav
             aria-label="Settings sections"
@@ -284,6 +743,7 @@ function Settings() {
                 <button
                   key={section.id}
                   type="button"
+                  disabled={saving}
                   onClick={() => {
                     setActiveSection(section.id);
                     setNotice("");
@@ -295,6 +755,7 @@ function Settings() {
                   }`}
                 >
                   <Icon size={19} />
+
                   {section.label}
                 </button>
               );
@@ -303,9 +764,13 @@ function Settings() {
         </aside>
 
         {/* SETTINGS CONTENT */}
+
         <div className="min-w-0">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
-            {/* BUSINESS INFORMATION */}
+            {/* =====================================
+                BUSINESS INFORMATION
+            ===================================== */}
+
             {activeSection === "business" && (
               <>
                 <SectionHeading
@@ -402,91 +867,140 @@ function Settings() {
               </>
             )}
 
-            {/* SERVICES & PRICING */}
+            {/* =====================================
+                SERVICES & PRICING
+            ===================================== */}
+
             {activeSection === "services" && (
               <>
                 <SectionHeading
                   title="Services & Pricing"
-                  description="Manage available services and illustrative starting prices. Final booking prices must be calculated by the backend."
+                  description="Manage available services and pricing. Fixed-price bookings must use prices calculated by the backend."
                 />
 
                 <div className="space-y-5">
-                  {settings.services.map((service) => (
-                    <div
-                      key={service.id}
-                      className="rounded-2xl border border-slate-200 p-5"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <h3 className="font-bold text-[#17324D]">
-                            {service.name}
-                          </h3>
+                  {settings.services.length === 0 && (
+                    <p className="text-sm text-slate-500">
+                      No services found.
+                    </p>
+                  )}
 
-                          <p className="mt-1 text-xs text-slate-500">
-                            {service.id}
-                          </p>
+                  {settings.services.map((service) => {
+                    const isQuote =
+                      service.pricingType === "QUOTE";
+
+                    return (
+                      <div
+                        key={service.id}
+                        className="rounded-2xl border border-slate-200 p-5"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h3 className="font-bold text-[#17324D]">
+                              {service.name}
+                            </h3>
+
+                            <p className="mt-1 text-xs text-slate-500">
+                              {service.slug}
+                            </p>
+                          </div>
+
+                          <label className="flex items-center gap-2 text-sm font-semibold text-[#17324D]">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(
+                                service.enabled
+                              )}
+                              onChange={(event) =>
+                                updateService(
+                                  service.id,
+                                  "enabled",
+                                  event.target.checked
+                                )
+                              }
+                              className="h-5 w-5 accent-[#2A9D8F]"
+                            />
+
+                            Enabled
+                          </label>
                         </div>
 
-                        <label className="flex items-center gap-2 text-sm font-semibold text-[#17324D]">
-                          <input
-                            type="checkbox"
-                            checked={service.enabled}
-                            onChange={(event) =>
-                              updateService(
-                                service.id,
-                                "enabled",
-                                event.target.checked
+                        <p className="mt-3 text-sm leading-7 text-slate-500">
+                          {service.description ||
+                            "No description available."}
+                        </p>
+
+                        {isQuote ? (
+                          <div className="mt-5 rounded-xl bg-amber-50 p-4">
+                            <p className="text-sm font-semibold text-amber-800">
+                              Quotation-Based Service
+                            </p>
+
+                            <p className="mt-1 text-xs leading-6 text-amber-700">
+                              Pricing is determined through
+                              an individual quotation rather
+                              than a fixed service price.
+                            </p>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="mt-5 max-w-xs">
+                              <Field label="Starting Price (GBP)">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={
+                                    service.startingPrice ??
+                                    ""
+                                  }
+                                  onChange={(event) =>
+                                    updateService(
+                                      service.id,
+                                      "startingPrice",
+                                      event.target.value ===
+                                        ""
+                                        ? null
+                                        : Number(
+                                            event.target.value
+                                          )
+                                    )
+                                  }
+                                  className={inputClass}
+                                />
+                              </Field>
+                            </div>
+
+                            <p className="mt-3 text-xs text-slate-500">
+                              Current price:{" "}
+                              {typeof service.startingPrice ===
+                                "number" &&
+                              Number.isFinite(
+                                service.startingPrice
                               )
-                            }
-                            className="h-5 w-5 accent-[#2A9D8F]"
-                          />
-                          Enabled
-                        </label>
+                                ? formatCurrency(
+                                    service.startingPrice
+                                  )
+                                : "Invalid amount"}
+                            </p>
+                          </>
+                        )}
                       </div>
-
-                      <p className="mt-3 text-sm leading-7 text-slate-500">
-                        {service.description}
-                      </p>
-
-                      <div className="mt-5 max-w-xs">
-                        <Field label="Starting Price (GBP)">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={service.startingPrice}
-                            onChange={(event) =>
-                              updateService(
-                                service.id,
-                                "startingPrice",
-                                event.target.value === ""
-                                  ? NaN
-                                  : Number(event.target.value)
-                              )
-                            }
-                            className={inputClass}
-                          />
-                        </Field>
-                      </div>
-
-                      <p className="mt-3 text-xs text-slate-500">
-                        Current demo price:{" "}
-                        {Number.isFinite(service.startingPrice)
-                          ? formatCurrency(service.startingPrice)
-                          : "Invalid amount"}
-                      </p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}
 
-            {/* BOOKING PREFERENCES */}
+            {/* =====================================
+                BOOKING PREFERENCES
+            ===================================== */}
+
             {activeSection === "booking" && (
               <>
                 <SectionHeading
                   title="Booking Preferences"
-                  description="Configure demonstration booking rules and operational requirements."
+                  description="Configure booking rules and operational requirements for ViewForMe."
                 />
 
                 <div className="grid gap-5 sm:grid-cols-2">
@@ -494,12 +1008,15 @@ function Settings() {
                     <input
                       type="number"
                       min="0"
-                      value={settings.booking.minimumNoticeHours}
+                      value={
+                        settings.booking
+                          .minimumNoticeHours ?? ""
+                      }
                       onChange={(event) =>
                         updateBooking(
                           "minimumNoticeHours",
                           event.target.value === ""
-                            ? NaN
+                            ? null
                             : Number(event.target.value)
                         )
                       }
@@ -511,12 +1028,15 @@ function Settings() {
                     <input
                       type="number"
                       min="1"
-                      value={settings.booking.maximumAdvanceDays}
+                      value={
+                        settings.booking
+                          .maximumAdvanceDays ?? ""
+                      }
                       onChange={(event) =>
                         updateBooking(
                           "maximumAdvanceDays",
                           event.target.value === ""
-                            ? NaN
+                            ? null
                             : Number(event.target.value)
                         )
                       }
@@ -527,7 +1047,10 @@ function Settings() {
                   <Field label="Appointment Window Starts">
                     <input
                       type="time"
-                      value={settings.booking.appointmentStartTime}
+                      value={
+                        settings.booking
+                          .appointmentStartTime
+                      }
                       onChange={(event) =>
                         updateBooking(
                           "appointmentStartTime",
@@ -541,7 +1064,10 @@ function Settings() {
                   <Field label="Appointment Window Ends">
                     <input
                       type="time"
-                      value={settings.booking.appointmentEndTime}
+                      value={
+                        settings.booking
+                          .appointmentEndTime
+                      }
                       onChange={(event) =>
                         updateBooking(
                           "appointmentEndTime",
@@ -558,7 +1084,8 @@ function Settings() {
                     label="Require Payment Before Coordination"
                     description="Do not begin the normal coordination workflow until payment is verified."
                     checked={
-                      settings.booking.requirePaymentBeforeCoordination
+                      settings.booking
+                        .requirePaymentBeforeCoordination
                     }
                     onChange={(value) =>
                       updateBooking(
@@ -572,7 +1099,8 @@ function Settings() {
                     label="Require Property Access Confirmation"
                     description="Property access must be arranged before confirming the appointment."
                     checked={
-                      settings.booking.requireAccessConfirmation
+                      settings.booking
+                        .requireAccessConfirmation
                     }
                     onChange={(value) =>
                       updateBooking(
@@ -586,7 +1114,8 @@ function Settings() {
                     label="Require Viewer Confirmation"
                     description="A viewer must be assigned and confirmed before the appointment is finalized."
                     checked={
-                      settings.booking.requireViewerConfirmation
+                      settings.booking
+                        .requireViewerConfirmation
                     }
                     onChange={(value) =>
                       updateBooking(
@@ -598,37 +1127,53 @@ function Settings() {
                 </div>
 
                 <p className="mt-5 text-xs leading-6 text-amber-700">
-                  These toggles are demonstration controls.
-                  Production booking confirmation must still
-                  enforce the approved operational safeguards
-                  on the server.
+                  These preferences are saved to the database.
+                  The booking backend must enforce the
+                  configured rules before they become
+                  operational. Payment verification and other
+                  mandatory security safeguards must remain
+                  enforced regardless of these settings.
                 </p>
               </>
             )}
 
-            {/* NOTIFICATIONS */}
+            {/* =====================================
+                NOTIFICATIONS
+            ===================================== */}
+
             {activeSection === "notifications" && (
               <>
                 <SectionHeading
                   title="Notification Preferences"
-                  description="Choose which events should generate administrative notifications once notification services are connected."
+                  description="Choose which events should generate administrative notifications."
                 />
 
                 <Toggle
                   label="New Booking"
                   description="Notify administrators when a new booking is received."
-                  checked={settings.notifications.newBooking}
+                  checked={
+                    settings.notifications.newBooking
+                  }
                   onChange={(value) =>
-                    updateNotification("newBooking", value)
+                    updateNotification(
+                      "newBooking",
+                      value
+                    )
                   }
                 />
 
                 <Toggle
                   label="Payment Received"
                   description="Notify administrators when a booking payment is verified."
-                  checked={settings.notifications.paymentReceived}
+                  checked={
+                    settings.notifications
+                      .paymentReceived
+                  }
                   onChange={(value) =>
-                    updateNotification("paymentReceived", value)
+                    updateNotification(
+                      "paymentReceived",
+                      value
+                    )
                   }
                 />
 
@@ -636,7 +1181,8 @@ function Settings() {
                   label="New Viewer Application"
                   description="Notify administrators when someone applies to become a viewer."
                   checked={
-                    settings.notifications.newViewerApplication
+                    settings.notifications
+                      .newViewerApplication
                   }
                   onChange={(value) =>
                     updateNotification(
@@ -649,18 +1195,28 @@ function Settings() {
                 <Toggle
                   label="New Customer Enquiry"
                   description="Notify administrators about new contact form submissions."
-                  checked={settings.notifications.newEnquiry}
+                  checked={
+                    settings.notifications.newEnquiry
+                  }
                   onChange={(value) =>
-                    updateNotification("newEnquiry", value)
+                    updateNotification(
+                      "newEnquiry",
+                      value
+                    )
                   }
                 />
 
                 <Toggle
                   label="Report Ready"
                   description="Notify administrators when a report is ready for customer delivery."
-                  checked={settings.notifications.reportReady}
+                  checked={
+                    settings.notifications.reportReady
+                  }
                   onChange={(value) =>
-                    updateNotification("reportReady", value)
+                    updateNotification(
+                      "reportReady",
+                      value
+                    )
                   }
                 />
 
@@ -668,7 +1224,8 @@ function Settings() {
                   label="Booking Cancellation"
                   description="Notify administrators when a booking is cancelled."
                   checked={
-                    settings.notifications.bookingCancelled
+                    settings.notifications
+                      .bookingCancelled
                   }
                   onChange={(value) =>
                     updateNotification(
@@ -677,15 +1234,25 @@ function Settings() {
                     )
                   }
                 />
+
+                <p className="mt-5 text-xs leading-6 text-amber-700">
+                  Notification preferences are stored in the
+                  database. Actual email or in-app
+                  notifications will require integration with
+                  the notification service.
+                </p>
               </>
             )}
 
-            {/* ADMIN PROFILE */}
+            {/* =====================================
+                ADMINISTRATOR PROFILE
+            ===================================== */}
+
             {activeSection === "administrator" && (
               <>
                 <SectionHeading
                   title="Administrator Profile"
-                  description="Review the administrator account details. Profile editing will require authenticated backend endpoints."
+                  description="View the details of your authenticated administrator account."
                 />
 
                 <div className="flex items-center gap-4 rounded-2xl bg-[#F6F9FA] p-5">
@@ -695,11 +1262,13 @@ function Settings() {
 
                   <div>
                     <h3 className="font-bold text-[#17324D]">
-                      {settings.administrator.name}
+                      {settings.administrator.name ||
+                        "Administrator"}
                     </h3>
 
                     <p className="mt-1 text-sm text-slate-500">
-                      {settings.administrator.role}
+                      {settings.administrator.role ||
+                        "Admin"}
                     </p>
                   </div>
                 </div>
@@ -709,7 +1278,9 @@ function Settings() {
                     <input
                       type="text"
                       readOnly
-                      value={settings.administrator.name}
+                      value={
+                        settings.administrator.name
+                      }
                       className={`${inputClass} bg-slate-50`}
                     />
                   </Field>
@@ -718,7 +1289,9 @@ function Settings() {
                     <input
                       type="email"
                       readOnly
-                      value={settings.administrator.email}
+                      value={
+                        settings.administrator.email
+                      }
                       className={`${inputClass} bg-slate-50`}
                     />
                   </Field>
@@ -727,7 +1300,9 @@ function Settings() {
                     <input
                       type="text"
                       readOnly
-                      value={settings.administrator.role}
+                      value={
+                        settings.administrator.role
+                      }
                       className={`${inputClass} bg-slate-50`}
                     />
                   </Field>
@@ -735,40 +1310,45 @@ function Settings() {
 
                 <div className="mt-7 rounded-xl border border-blue-200 bg-blue-50 p-5">
                   <p className="text-sm leading-7 text-blue-800">
-                    Administrator identity, role changes,
-                    password updates, and account recovery
-                    will be managed through secure,
-                    authenticated backend workflows.
+                    Administrator information is retrieved
+                    from your authenticated account.
+                    Profile editing, password updates, and
+                    role management will be implemented
+                    through secure backend endpoints.
                   </p>
                 </div>
               </>
             )}
 
-            {/* SECURITY & INTEGRATIONS */}
+            {/* =====================================
+                SECURITY & INTEGRATIONS
+            ===================================== */}
+
             {activeSection === "security" && (
               <>
                 <SectionHeading
                   title="Security & Integrations"
-                  description="View demonstration integration statuses and platform security requirements."
+                  description="Review platform integrations and security requirements."
                 />
 
                 <div className="space-y-4">
                   {[
                     {
                       label: "Stripe Payments",
-                      status: settings.integrations.stripe,
+                      status:
+                        "Configured — not verified here",
                     },
                     {
                       label: "Email Service",
-                      status: settings.integrations.email,
+                      status: "Not verified",
                     },
                     {
                       label: "Database",
-                      status: settings.integrations.database,
+                      status: "Not verified",
                     },
                     {
                       label: "File Storage",
-                      status: settings.integrations.fileStorage,
+                      status: "Not required",
                     },
                   ].map((integration) => (
                     <div
@@ -813,35 +1393,45 @@ function Settings() {
                   />
 
                   <p className="text-sm leading-7 text-slate-600">
-                    Production integration statuses
-                    should come from authorized backend
-                    health checks, not hardcoded frontend values.
+                    Production integration statuses should
+                    come from authorized backend health
+                    checks, not hardcoded frontend values.
                   </p>
                 </div>
               </>
             )}
 
-            {/* FOOTER ACTIONS */}
-            {!["administrator", "security"].includes(
-              activeSection
-            ) && (
+            {/* =====================================
+                FOOTER ACTIONS
+            ===================================== */}
+
+            {![
+              "administrator",
+              "security",
+            ].includes(activeSection) && (
               <div className="mt-8 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-6">
                 <button
                   type="button"
                   onClick={resetSettings}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <RotateCcw size={17} />
-                  Reset Demo
+
+                  Reset Changes
                 </button>
 
                 <button
                   type="button"
-                  onClick={handleValidate}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-3 text-sm font-semibold text-white hover:bg-[#238579]"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#2A9D8F] px-6 py-3 text-sm font-semibold text-white hover:bg-[#238579] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Save size={17} />
-                  Validate Changes
+
+                  {saving
+                    ? "Saving..."
+                    : "Save Changes"}
                 </button>
               </div>
             )}
