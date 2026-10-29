@@ -1,4 +1,6 @@
 
+import { useEffect } from "react";
+
 import {
   BrowserRouter,
   Routes,
@@ -42,6 +44,34 @@ import BookingSuccess from "./pages/BookingSuccess.jsx";
 import BookingCancel from "./pages/BookingCancel.jsx";
 
 function App() {
+  // Wake up the hosted Render backend when the website loads
+  useEffect(() => {
+    const wakeServer = async () => {
+      try {
+        const response = await fetch(
+          "https://api.viewforme.org/api/health"
+        );
+
+        if (!response.ok) {
+          console.warn(
+            "ViewForMe backend health check failed:",
+            response.status
+          );
+          return;
+        }
+
+        console.log("ViewForMe backend is active");
+      } catch (error) {
+        console.error(
+          "ViewForMe backend is unavailable:",
+          error
+        );
+      }
+    };
+
+    wakeServer();
+  }, []);
+
   return (
     <BrowserRouter>
       <AdminAuthProvider>
